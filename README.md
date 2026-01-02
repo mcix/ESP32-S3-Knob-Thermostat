@@ -19,6 +19,12 @@ A smart thermostat controller built for the [Waveshare ESP32-S3-Knob-Touch-LCD-1
 
 ## Hardware
 
+<p align="center">
+  <img src="https://www.waveshare.com/media/catalog/product/cache/1/image/800x800/9df78eab33525d08d6e5fb8d27136e95/e/s/esp32-s3-knob-touch-lcd-1.8-1.jpg" alt="Waveshare ESP32-S3-Knob-Touch-LCD-1.8" width="300"/>
+</p>
+
+The [Waveshare ESP32-S3-Knob-Touch-LCD-1.8](https://www.waveshare.com/wiki/ESP32-S3-Knob-Touch-LCD-1.8):
+
 - **Display**: 1.8" 360x360 round LCD (ST77916 QSPI)
 - **Input**: Rotary encoder knob + CST816 capacitive touch
 - **Connectivity**: WiFi 802.11 b/g/n
