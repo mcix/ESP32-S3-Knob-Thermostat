@@ -1,0 +1,160 @@
+#include "encoder.h"
+#include "../config.h"
+#include <Arduino.h>
+#include <lvgl.h>
+
+// Encoder state
+static volatile int32_t encoder_position = 0;
+static volatile int8_t last_direction = 0;
+static volatile bool button_state = false;
+static volatile uint32_t last_encoder_time = 0;
+
+// Callbacks
+static encoder_callback_t rotation_callback = nullptr;
+static button_callback_t button_callback = nullptr;
+
+// LVGL input device
+static lv_indev_drv_t enc_drv;
+static lv_indev_t* enc_indev = nullptr;
+static lv_group_t* enc_group = nullptr;
+
+// Debounce settings
+#define ENCODER_DEBOUNCE_US 1000
+#define BUTTON_DEBOUNCE_MS 50
+
+// Last encoder pin states
+static volatile uint8_t last_state = 0;
+
+// Encoder state machine lookup table
+// States: AB = 00, 01, 10, 11
+// Transitions that indicate direction
+static const int8_t encoder_table[] = {
+     0, -1,  1,  0,
+     1,  0,  0, -1,
+    -1,  0,  0,  1,
+     0,  1, -1,  0
+};
+
+// ISR for encoder rotation
+static void IRAM_ATTR encoder_isr() {
+    uint32_t now = micros();
+    if (now - last_encoder_time < ENCODER_DEBOUNCE_US) {
+        return;
+    }
+    last_encoder_time = now;
+
+    uint8_t a = digitalRead(ENCODER_A);
+    uint8_t b = digitalRead(ENCODER_B);
+    uint8_t state = (a << 1) | b;
+
+    int8_t direction = encoder_table[(last_state << 2) | state];
+    last_state = state;
+
+    if (direction != 0) {
+        encoder_position += direction;
+        last_direction = direction;
+    }
+}
+
+// ISR for button press
+static void IRAM_ATTR button_isr() {
+    static uint32_t last_button_time = 0;
+    uint32_t now = millis();
+
+    if (now - last_button_time < BUTTON_DEBOUNCE_MS) {
+        return;
+    }
+    last_button_time = now;
+
+    button_state = !digitalRead(ENCODER_BTN);  // Active low
+}
+
+// LVGL encoder read callback
+static void enc_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
+    static int32_t last_pos = 0;
+    int32_t current_pos = encoder_position;
+
+    int32_t diff = current_pos - last_pos;
+    last_pos = current_pos;
+
+    data->enc_diff = diff;
+    data->state = button_state ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+}
+
+bool encoder_init() {
+    Serial.printf("Encoder init: A=GPIO%d, B=GPIO%d, BTN=GPIO%d\n", ENCODER_A, ENCODER_B, ENCODER_BTN);
+
+    // Configure encoder pins with pull-up
+    pinMode(ENCODER_A, INPUT_PULLUP);
+    pinMode(ENCODER_B, INPUT_PULLUP);
+    pinMode(ENCODER_BTN, INPUT_PULLUP);
+
+    // Read initial state
+    last_state = (digitalRead(ENCODER_A) << 1) | digitalRead(ENCODER_B);
+    Serial.printf("Encoder initial state: A=%d, B=%d\n", digitalRead(ENCODER_A), digitalRead(ENCODER_B));
+
+    // Attach interrupts
+    attachInterrupt(digitalPinToInterrupt(ENCODER_A), encoder_isr, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_B), encoder_isr, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_BTN), button_isr, CHANGE);
+
+    Serial.println("Encoder interrupts attached");
+    return true;
+}
+
+void encoder_set_rotation_callback(encoder_callback_t callback) {
+    rotation_callback = callback;
+}
+
+void encoder_set_button_callback(button_callback_t callback) {
+    button_callback = callback;
+}
+
+int32_t encoder_get_position() {
+    return encoder_position;
+}
+
+void encoder_reset_position() {
+    noInterrupts();
+    encoder_position = 0;
+    interrupts();
+}
+
+bool encoder_button_pressed() {
+    return button_state;
+}
+
+void encoder_update() {
+    static int32_t prev_position = 0;
+    static bool prev_button = false;
+
+    // Check for rotation change
+    int32_t pos = encoder_position;
+    if (pos != prev_position && rotation_callback) {
+        int8_t dir = (pos > prev_position) ? 1 : -1;
+        rotation_callback(dir);
+        prev_position = pos;
+    }
+
+    // Check for button change
+    bool btn = button_state;
+    if (btn != prev_button && button_callback) {
+        button_callback(btn);
+        prev_button = btn;
+    }
+}
+
+void encoder_register_lvgl() {
+    // Create LVGL input device for encoder
+    lv_indev_drv_init(&enc_drv);
+    enc_drv.type = LV_INDEV_TYPE_ENCODER;
+    enc_drv.read_cb = enc_read_cb;
+    enc_indev = lv_indev_drv_register(&enc_drv);
+
+    // Create a group for encoder navigation
+    enc_group = lv_group_create();
+    lv_indev_set_group(enc_indev, enc_group);
+    lv_group_set_default(enc_group);
+
+    Serial.println("Encoder registered with LVGL");
+}
