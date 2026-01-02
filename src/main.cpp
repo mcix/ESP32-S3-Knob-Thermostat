@@ -39,8 +39,8 @@ void setup() {
         while (1) delay(100);
     }
 
-    // Set backlight to 50%
-    display_set_brightness(128);
+    // Set backlight to 25%
+    display_set_brightness(128 / 2);
 
     // Initialize UI
     ui_init();
@@ -99,8 +99,8 @@ void loop() {
         }
     }
 
-    // Periodic refresh of current temperature
-    if (now - lastRefreshTime >= REFRESH_INTERVAL_MS) {
+    // Periodic refresh of current temperature (skip if user is adjusting)
+    if (!hasPendingTemp && (now - lastRefreshTime >= REFRESH_INTERVAL_MS)) {
         fetchThermostatState();
         lastRefreshTime = now;
     }
@@ -182,6 +182,7 @@ void checkAndPushTemperature() {
         confirmedTemp = pendingTemp;
         hasPendingTemp = false;
         waitingForConfirm = true;
+        lastRefreshTime = millis();  // Reset refresh timer after push
         ui_show_status("Temp set");
         Serial.println("Temperature pushed successfully");
     } else {
@@ -214,6 +215,9 @@ void onEncoderRotation(int8_t direction) {
 
     Serial.printf("Encoder: %s, Pending temp: %.1f°C\n",
                   direction > 0 ? "CW" : "CCW", pendingTemp);
+
+    // Print debug info about encoder state transitions
+    encoder_print_debug();
 }
 
 void onEncoderButton(bool pressed) {

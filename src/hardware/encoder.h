@@ -61,4 +61,9 @@ void encoder_update();
  */
 void encoder_register_lvgl();
 
+/**
+ * Print debug log of recent encoder state transitions
+ */
+void encoder_print_debug();
+
 #endif // ENCODER_H

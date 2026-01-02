@@ -26,8 +26,15 @@ static volatile uint8_t last_state = 0;
 // Encoder state tracking for full-step detection
 static volatile int8_t enc_val = 0;
 
+// Debug: store recent state transitions for logging
+#define DEBUG_LOG_SIZE 16
+static volatile uint8_t debug_states[DEBUG_LOG_SIZE];
+static volatile int8_t debug_dirs[DEBUG_LOG_SIZE];
+static volatile uint8_t debug_idx = 0;
+
 // ISR for encoder rotation
-// Count on both edges of A for full coverage
+// Only count transitions FROM resting state (11)
+// CW: 11 -> 01, CCW: 11 -> 10
 static void IRAM_ATTR encoder_isr() {
     uint8_t a = digitalRead(ENCODER_A);
     uint8_t b = digitalRead(ENCODER_B);
@@ -38,35 +45,46 @@ static void IRAM_ATTR encoder_isr() {
         return;
     }
 
-    uint8_t last_a = (last_state >> 1) & 1;
+    int8_t dir = 0;
 
-    // Count on A transitions only (gives one count per detent)
-    if (a != last_a) {
-        // A changed - determine direction based on A and B relationship
-        // When A falls: B=1 means CW, B=0 means CCW
-        // When A rises: B=0 means CW, B=1 means CCW
-        if (a == 0) {
-            // A fell
-            if (b == 1) {
-                encoder_position++;
-                last_direction = 1;
-            } else {
-                encoder_position--;
-                last_direction = -1;
-            }
-        } else {
-            // A rose
-            if (b == 0) {
-                encoder_position++;
-                last_direction = 1;
-            } else {
-                encoder_position--;
-                last_direction = -1;
-            }
+    // Only count when leaving the 11 resting state
+    if (last_state == 0b11) {
+        if (state == 0b01) {
+            // 11 -> 01: CW
+            encoder_position++;
+            dir = 1;
+            last_direction = 1;
+        } else if (state == 0b10) {
+            // 11 -> 10: CCW
+            encoder_position--;
+            dir = -1;
+            last_direction = -1;
         }
     }
 
+    // Log state transition for debugging
+    debug_states[debug_idx] = (last_state << 4) | state;
+    debug_dirs[debug_idx] = dir;
+    debug_idx = (debug_idx + 1) % DEBUG_LOG_SIZE;
+
     last_state = state;
+}
+
+// Print debug log of recent encoder transitions
+void encoder_print_debug() {
+    Serial.println("Encoder debug log (old_state -> new_state : direction):");
+    for (int i = 0; i < DEBUG_LOG_SIZE; i++) {
+        uint8_t idx = (debug_idx + i) % DEBUG_LOG_SIZE;
+        uint8_t old_s = (debug_states[idx] >> 4) & 0x0F;
+        uint8_t new_s = debug_states[idx] & 0x0F;
+        int8_t dir = debug_dirs[idx];
+        if (old_s != new_s || dir != 0) {
+            Serial.printf("  %d%d -> %d%d : %s\n",
+                          (old_s >> 1) & 1, old_s & 1,
+                          (new_s >> 1) & 1, new_s & 1,
+                          dir > 0 ? "CW" : (dir < 0 ? "CCW" : "-"));
+        }
+    }
 }
 
 // ISR for button press
