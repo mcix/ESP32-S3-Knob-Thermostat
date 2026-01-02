@@ -125,7 +125,7 @@
 #define LV_FONT_MONTSERRAT_26 0
 #define LV_FONT_MONTSERRAT_28 0
 #define LV_FONT_MONTSERRAT_30 0
-#define LV_FONT_MONTSERRAT_32 0
+#define LV_FONT_MONTSERRAT_32 1  /* For current temperature */
 #define LV_FONT_MONTSERRAT_34 0
 #define LV_FONT_MONTSERRAT_36 0
 #define LV_FONT_MONTSERRAT_38 0
@@ -181,7 +181,7 @@
 #define LV_USE_DROPDOWN   0
 #define LV_USE_IMG        1  /* For icons */
 #define LV_USE_LABEL      1  /* For temperature text */
-#define LV_USE_LINE       0
+#define LV_USE_LINE       1  /* For tick marks */
 #define LV_USE_ROLLER     0
 #define LV_USE_SLIDER     0
 #define LV_USE_SWITCH     0

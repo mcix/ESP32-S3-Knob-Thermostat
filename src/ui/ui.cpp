@@ -2,110 +2,159 @@
 #include "../config.h"
 #include <Arduino.h>
 #include <stdio.h>
+#include <math.h>
 
 // UI Elements
 static lv_obj_t* screen = nullptr;
-static lv_obj_t* arc_bg = nullptr;      // Background arc (full circle)
-static lv_obj_t* arc_temp = nullptr;    // Temperature arc (shows value)
+static lv_obj_t* bg_circle = nullptr;
 static lv_obj_t* label_target = nullptr;
 static lv_obj_t* label_current = nullptr;
-static lv_obj_t* label_status = nullptr;
-static lv_obj_t* spinner = nullptr;
+static lv_obj_t* label_status = nullptr;  // Small status text below current temp
 
-// Current values
+// Tick marks
+#define NUM_TICKS 60
+#define TICK_ARC_DEGREES 270.0f
+#define TICK_START_ANGLE 135.0f
+
+static lv_obj_t* ticks[NUM_TICKS];
+static lv_point_t tick_points[NUM_TICKS][2];
+static lv_point_t tick_points_long[NUM_TICKS][2];
+
+// Current state
 static float current_target = TEMP_DEFAULT;
+static float current_temp = TEMP_DEFAULT;
+static bool current_heating = false;
 static UIState current_state = UI_STATE_CONNECTING;
 
-// Colors - Note: Display uses invertDisplay(true), so colors appear as intended
-static const lv_color_t COLOR_BG = lv_color_black();            // Pure black background
-static const lv_color_t COLOR_ARC_BG = lv_color_hex(0x333333);  // Dark gray arc background
-static const lv_color_t COLOR_ARC_COLD = lv_color_hex(0x4facfe);
-static const lv_color_t COLOR_ARC_WARM = lv_color_hex(0xf5576c);
-static const lv_color_t COLOR_ARC_NORMAL = lv_color_hex(0x00f2fe);
-static const lv_color_t COLOR_TEXT = lv_color_white();          // White text
-static const lv_color_t COLOR_TEXT_DIM = lv_color_hex(0x888888);
-static const lv_color_t COLOR_SUCCESS = lv_color_hex(0x4ade80);
+// Status clear timer
+static uint32_t status_clear_time = 0;
 
-// Convert temperature to arc angle (15-30°C -> 135-405 degrees = 270 degree range)
-static int16_t temp_to_angle(float temp) {
+// Colors
+static const lv_color_t COLOR_HEATING = lv_color_hex(0xE46A2C);     // RGB 228, 106, 44
+static const lv_color_t COLOR_IDLE = lv_color_hex(0x000000);
+static const lv_color_t COLOR_TEXT = lv_color_hex(0xFFFFFF);
+static const lv_color_t COLOR_TICK_ACTIVE = lv_color_hex(0xFFFFFF);
+
+// Convert temperature to tick index (0-59)
+static int temp_to_tick_index(float temp) {
     float normalized = (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
-    return (int16_t)(135 + normalized * 270);
+    normalized = fmax(0.0f, fmin(1.0f, normalized));
+    return (int)(normalized * (NUM_TICKS - 1));
 }
 
-// Get arc color based on temperature
-static lv_color_t get_temp_color(float temp) {
-    if (temp < 18.0f) return COLOR_ARC_COLD;
-    if (temp > 23.0f) return COLOR_ARC_WARM;
-    return COLOR_ARC_NORMAL;
+// Update tick mark styles based on current and target temperature
+static void update_tick_styles() {
+    int current_idx = temp_to_tick_index(current_temp);
+    int target_idx = temp_to_tick_index(current_target);
+
+    int low_idx = min(current_idx, target_idx);
+    int high_idx = max(current_idx, target_idx);
+
+    for (int i = 0; i < NUM_TICKS; i++) {
+        if (ticks[i] == nullptr) continue;
+
+        bool is_current = (i == current_idx);
+        bool is_target = (i == target_idx);
+        bool is_between = (i >= low_idx && i <= high_idx);
+
+        lv_opa_t opacity = is_between ? LV_OPA_100 : LV_OPA_70;
+        lv_obj_set_style_line_opa(ticks[i], opacity, 0);
+
+        int width = 2;
+        if (is_current || is_target) {
+            width = 4;
+        }
+        lv_obj_set_style_line_width(ticks[i], width, 0);
+
+        if (is_target) {
+            lv_line_set_points(ticks[i], tick_points_long[i], 2);
+        } else {
+            lv_line_set_points(ticks[i], tick_points[i], 2);
+        }
+
+        lv_obj_set_style_line_color(ticks[i], COLOR_TICK_ACTIVE, 0);
+    }
+}
+
+// Create tick marks around the edge (top 75% of circle)
+static void create_tick_marks() {
+    int cx = DISPLAY_WIDTH / 2;
+    int cy = DISPLAY_HEIGHT / 2;
+    int outer_r = 175;
+    int inner_r = 160;
+    int inner_r_long = 150;
+
+    for (int i = 0; i < NUM_TICKS; i++) {
+        float angle = TICK_START_ANGLE + (float)i * (TICK_ARC_DEGREES / (NUM_TICKS - 1));
+        float rad = angle * M_PI / 180.0f;
+
+        int x1 = cx + (int)(inner_r * cosf(rad));
+        int y1 = cy + (int)(inner_r * sinf(rad));
+        int x2 = cx + (int)(outer_r * cosf(rad));
+        int y2 = cy + (int)(outer_r * sinf(rad));
+
+        tick_points[i][0].x = x1;
+        tick_points[i][0].y = y1;
+        tick_points[i][1].x = x2;
+        tick_points[i][1].y = y2;
+
+        int x1_long = cx + (int)(inner_r_long * cosf(rad));
+        int y1_long = cy + (int)(inner_r_long * sinf(rad));
+
+        tick_points_long[i][0].x = x1_long;
+        tick_points_long[i][0].y = y1_long;
+        tick_points_long[i][1].x = x2;
+        tick_points_long[i][1].y = y2;
+
+        ticks[i] = lv_line_create(screen);
+        lv_line_set_points(ticks[i], tick_points[i], 2);
+        lv_obj_set_style_line_color(ticks[i], COLOR_TICK_ACTIVE, 0);
+        lv_obj_set_style_line_width(ticks[i], 2, 0);
+        lv_obj_set_style_line_rounded(ticks[i], true, 0);
+        lv_obj_set_style_line_opa(ticks[i], LV_OPA_70, 0);
+    }
 }
 
 void ui_init() {
-    // Get active screen and set black background
     screen = lv_scr_act();
-
-    // Force black background by removing all styles and setting explicitly
     lv_obj_remove_style_all(screen);
-    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(screen, COLOR_IDLE, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
 
-    Serial.println("UI: Screen background set to black");
+    // Background circle
+    bg_circle = lv_obj_create(screen);
+    lv_obj_remove_style_all(bg_circle);
+    lv_obj_set_size(bg_circle, 350, 350);
+    lv_obj_center(bg_circle);
+    lv_obj_set_style_radius(bg_circle, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(bg_circle, COLOR_IDLE, 0);
+    lv_obj_set_style_bg_opa(bg_circle, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(bg_circle, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Create background arc (full range indicator)
-    arc_bg = lv_arc_create(screen);
-    lv_obj_set_size(arc_bg, 320, 320);
-    lv_obj_center(arc_bg);
-    lv_arc_set_mode(arc_bg, LV_ARC_MODE_NORMAL);
-    lv_arc_set_bg_angles(arc_bg, 135, 405);
-    lv_arc_set_angles(arc_bg, 135, 405);
-    lv_arc_set_range(arc_bg, TEMP_MIN * 10, TEMP_MAX * 10);
-    lv_obj_remove_style(arc_bg, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(arc_bg, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_color(arc_bg, COLOR_ARC_BG, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc_bg, COLOR_ARC_BG, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc_bg, 20, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(arc_bg, 20, LV_PART_MAIN);
+    // Tick marks
+    create_tick_marks();
 
-    // Create temperature arc (value indicator)
-    arc_temp = lv_arc_create(screen);
-    lv_obj_set_size(arc_temp, 320, 320);
-    lv_obj_center(arc_temp);
-    lv_arc_set_mode(arc_temp, LV_ARC_MODE_NORMAL);
-    lv_arc_set_bg_angles(arc_temp, 135, 405);
-    lv_arc_set_range(arc_temp, TEMP_MIN * 10, TEMP_MAX * 10);
-    lv_arc_set_value(arc_temp, TEMP_DEFAULT * 10);
-    lv_obj_remove_style(arc_temp, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(arc_temp, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_arc_color(arc_temp, COLOR_ARC_NORMAL, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc_temp, lv_color_hex(0x00000000), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc_temp, 20, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc_temp, true, LV_PART_INDICATOR);
-
-    // Target temperature label (large, center)
+    // Target temperature (large, center)
     label_target = lv_label_create(screen);
     lv_obj_set_style_text_font(label_target, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(label_target, COLOR_TEXT, 0);
     lv_label_set_text(label_target, "--.-°");
     lv_obj_align(label_target, LV_ALIGN_CENTER, 0, -20);
 
-    // Current temperature label (smaller, below target)
+    // Current temperature (below target)
     label_current = lv_label_create(screen);
-    lv_obj_set_style_text_font(label_current, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(label_current, COLOR_TEXT_DIM, 0);
-    lv_label_set_text(label_current, "Current: --.-°C");
-    lv_obj_align(label_current, LV_ALIGN_CENTER, 0, 30);
+    lv_obj_set_style_text_font(label_current, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(label_current, COLOR_TEXT, 0);
+    lv_label_set_text(label_current, "--.-°");
+    lv_obj_align(label_current, LV_ALIGN_CENTER, 0, 35);
 
-    // Status label (bottom)
+    // Small status text (12px, below current temp)
     label_status = lv_label_create(screen);
     lv_obj_set_style_text_font(label_status, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(label_status, COLOR_TEXT_DIM, 0);
-    lv_label_set_text(label_status, "Turn knob to adjust");
-    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 70);
-
-    // Loading spinner (hidden by default)
-    spinner = lv_spinner_create(screen, 1000, 60);
-    lv_obj_set_size(spinner, 60, 60);
-    lv_obj_center(spinner);
-    lv_obj_add_flag(spinner, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_text_color(label_status, COLOR_TEXT, 0);
+    lv_obj_set_style_text_opa(label_status, LV_OPA_70, 0);
+    lv_label_set_text(label_status, "");
+    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 75);
 
     Serial.println("UI initialized");
 }
@@ -113,106 +162,80 @@ void ui_init() {
 void ui_set_target_temp(float temp) {
     current_target = temp;
 
-    // Update label
     char buf[16];
     snprintf(buf, sizeof(buf), "%.1f°", temp);
     lv_label_set_text(label_target, buf);
     lv_obj_align(label_target, LV_ALIGN_CENTER, 0, -20);
 
-    // Update arc
-    ui_update_arc(temp);
+    update_tick_styles();
 }
 
 void ui_set_current_temp(float temp) {
-    char buf[24];
-    snprintf(buf, sizeof(buf), "Current: %.1f°C", temp);
+    current_temp = temp;
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.1f°", temp);
     lv_label_set_text(label_current, buf);
-    lv_obj_align(label_current, LV_ALIGN_CENTER, 0, 30);
+    lv_obj_align(label_current, LV_ALIGN_CENTER, 0, 35);
+
+    update_tick_styles();
+}
+
+void ui_set_heating(bool heating) {
+    if (current_heating == heating) return;
+    current_heating = heating;
+
+    lv_color_t bg_color = heating ? COLOR_HEATING : COLOR_IDLE;
+    lv_obj_set_style_bg_color(screen, bg_color, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bg_circle, bg_color, 0);
+
+    Serial.printf("UI: Heating %s\n", heating ? "ON" : "OFF");
 }
 
 void ui_update_arc(float temp) {
-    // Set arc value
-    lv_arc_set_value(arc_temp, (int16_t)(temp * 10));
-
-    // Update color based on temperature
-    lv_obj_set_style_arc_color(arc_temp, get_temp_color(temp), LV_PART_INDICATOR);
+    // Not used
 }
 
 void ui_set_state(UIState state) {
     current_state = state;
-
-    switch (state) {
-        case UI_STATE_CONNECTING:
-            lv_obj_clear_flag(spinner, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(label_target, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(label_current, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(label_status, "Connecting...");
-            lv_obj_set_style_text_color(label_status, COLOR_TEXT_DIM, 0);
-            break;
-
-        case UI_STATE_NORMAL:
-            lv_obj_add_flag(spinner, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(label_target, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(label_current, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(label_status, "Turn knob to adjust");
-            lv_obj_set_style_text_color(label_status, COLOR_TEXT_DIM, 0);
-            break;
-
-        case UI_STATE_ADJUSTING:
-            lv_obj_add_flag(spinner, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(label_target, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(label_status, "Adjusting...");
-            lv_obj_set_style_text_color(label_status, COLOR_ARC_NORMAL, 0);
-            break;
-
-        case UI_STATE_SENDING:
-            lv_obj_clear_flag(spinner, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(label_status, "Sending to Homey...");
-            lv_obj_set_style_text_color(label_status, COLOR_TEXT_DIM, 0);
-            break;
-
-        case UI_STATE_ERROR:
-            lv_obj_add_flag(spinner, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(label_target, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_text_color(label_status, COLOR_ARC_WARM, 0);
-            break;
-    }
-
-    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 70);
+    // States are now handled via ui_show_status
 }
 
 void ui_show_error(const char* message) {
     lv_label_set_text(label_status, message);
-    lv_obj_set_style_text_color(label_status, COLOR_ARC_WARM, 0);
-    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 70);
+    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 75);
 }
 
 void ui_clear_error() {
-    ui_set_state(UI_STATE_NORMAL);
+    lv_label_set_text(label_status, "");
 }
 
 lv_obj_t* ui_get_arc() {
-    return arc_temp;
-}
-
-// Animation callback for confirmation pulse
-static void anim_pulse_cb(void* var, int32_t value) {
-    lv_obj_set_style_arc_width((lv_obj_t*)var, value, LV_PART_INDICATOR);
+    return nullptr;
 }
 
 void ui_animate_confirm() {
-    // Pulse animation on the arc
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, arc_temp);
-    lv_anim_set_values(&a, 20, 30);
-    lv_anim_set_time(&a, 150);
-    lv_anim_set_playback_time(&a, 150);
-    lv_anim_set_exec_cb(&a, anim_pulse_cb);
-    lv_anim_start(&a);
+    // Not used anymore
+}
 
-    // Flash status green briefly
-    lv_label_set_text(label_status, "Temperature set!");
-    lv_obj_set_style_text_color(label_status, COLOR_SUCCESS, 0);
-    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 70);
+// New functions for status text
+void ui_show_status(const char* text) {
+    lv_label_set_text(label_status, text);
+    lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 75);
+}
+
+void ui_clear_status() {
+    lv_label_set_text(label_status, "");
+}
+
+void ui_set_status_clear_timer(uint32_t delay_ms) {
+    status_clear_time = millis() + delay_ms;
+}
+
+void ui_update() {
+    // Check if status should be cleared
+    if (status_clear_time > 0 && millis() >= status_clear_time) {
+        ui_clear_status();
+        status_clear_time = 0;
+    }
 }

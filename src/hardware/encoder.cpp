@@ -7,7 +7,6 @@
 static volatile int32_t encoder_position = 0;
 static volatile int8_t last_direction = 0;
 static volatile bool button_state = false;
-static volatile uint32_t last_encoder_time = 0;
 
 // Callbacks
 static encoder_callback_t rotation_callback = nullptr;
@@ -19,41 +18,55 @@ static lv_indev_t* enc_indev = nullptr;
 static lv_group_t* enc_group = nullptr;
 
 // Debounce settings
-#define ENCODER_DEBOUNCE_US 1000
 #define BUTTON_DEBOUNCE_MS 50
 
 // Last encoder pin states
 static volatile uint8_t last_state = 0;
 
-// Encoder state machine lookup table
-// States: AB = 00, 01, 10, 11
-// Transitions that indicate direction
-static const int8_t encoder_table[] = {
-     0, -1,  1,  0,
-     1,  0,  0, -1,
-    -1,  0,  0,  1,
-     0,  1, -1,  0
-};
+// Encoder state tracking for full-step detection
+static volatile int8_t enc_val = 0;
 
 // ISR for encoder rotation
+// Count on both edges of A for full coverage
 static void IRAM_ATTR encoder_isr() {
-    uint32_t now = micros();
-    if (now - last_encoder_time < ENCODER_DEBOUNCE_US) {
-        return;
-    }
-    last_encoder_time = now;
-
     uint8_t a = digitalRead(ENCODER_A);
     uint8_t b = digitalRead(ENCODER_B);
     uint8_t state = (a << 1) | b;
 
-    int8_t direction = encoder_table[(last_state << 2) | state];
-    last_state = state;
-
-    if (direction != 0) {
-        encoder_position += direction;
-        last_direction = direction;
+    // Ignore if state hasn't changed
+    if (state == last_state) {
+        return;
     }
+
+    uint8_t last_a = (last_state >> 1) & 1;
+
+    // Count on A transitions only (gives one count per detent)
+    if (a != last_a) {
+        // A changed - determine direction based on A and B relationship
+        // When A falls: B=1 means CW, B=0 means CCW
+        // When A rises: B=0 means CW, B=1 means CCW
+        if (a == 0) {
+            // A fell
+            if (b == 1) {
+                encoder_position++;
+                last_direction = 1;
+            } else {
+                encoder_position--;
+                last_direction = -1;
+            }
+        } else {
+            // A rose
+            if (b == 0) {
+                encoder_position++;
+                last_direction = 1;
+            } else {
+                encoder_position--;
+                last_direction = -1;
+            }
+        }
+    }
+
+    last_state = state;
 }
 
 // ISR for button press
@@ -127,13 +140,32 @@ bool encoder_button_pressed() {
 void encoder_update() {
     static int32_t prev_position = 0;
     static bool prev_button = false;
+    static int8_t prev_dir = 0;
+    static uint32_t last_rotation_time = 0;
 
     // Check for rotation change
     int32_t pos = encoder_position;
     if (pos != prev_position && rotation_callback) {
         int8_t dir = (pos > prev_position) ? 1 : -1;
+        uint32_t now = millis();
+
+        // Filter rapid direction changes (debounce direction reversals)
+        // If direction reversed within 100ms, likely bounce - ignore
+        if (dir != prev_dir && prev_dir != 0 && (now - last_rotation_time < 100)) {
+            Serial.printf("Encoder: filtered spurious %s (too fast after %s)\n",
+                          dir > 0 ? "CW" : "CCW", prev_dir > 0 ? "CW" : "CCW");
+            // Reset position to ignore this spurious count
+            noInterrupts();
+            encoder_position = prev_position;
+            interrupts();
+            return;
+        }
+
+        // Valid rotation - process it
         rotation_callback(dir);
         prev_position = pos;
+        prev_dir = dir;
+        last_rotation_time = now;
     }
 
     // Check for button change

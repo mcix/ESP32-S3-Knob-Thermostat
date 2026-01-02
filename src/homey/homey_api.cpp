@@ -60,7 +60,8 @@ int HomeyAPI::httpPut(const String& endpoint, const String& body, String& respon
     http.begin(url);
     http.addHeader("Authorization", String("Bearer ") + _apiKey);
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(API_TIMEOUT_MS);
+    // Homey can be slow to respond to PUT requests, use longer timeout
+    http.setTimeout(10000);
 
     int httpCode = http.PUT(body);
 
@@ -78,6 +79,7 @@ bool HomeyAPI::getState(ThermostatState& state) {
     state.connected = false;
     state.targetTemperature = TEMP_DEFAULT;
     state.currentTemperature = TEMP_DEFAULT;
+    state.isHeating = false;
 
     String response;
     int httpCode = httpGet(_deviceId, response);
@@ -122,14 +124,27 @@ bool HomeyAPI::getState(ThermostatState& state) {
         }
     }
 
+    // Get heating state (Plugwise uses "heating" capability)
+    if (capabilities["heating"].is<JsonObject>()) {
+        JsonObject heating = capabilities["heating"];
+        if (heating["value"].is<bool>()) {
+            state.isHeating = heating["value"].as<bool>();
+        }
+    }
+    // Fallback: if target > current, assume heating
+    if (!capabilities["heating"].is<JsonObject>()) {
+        state.isHeating = (state.targetTemperature > state.currentTemperature + 0.5f);
+    }
+
     state.connected = true;
     _connected = true;
     _lastError = "";
 
-    Serial.printf("Thermostat: %s, Target: %.1f°C, Current: %.1f°C\n",
+    Serial.printf("Thermostat: %s, Target: %.1f°C, Current: %.1f°C, Heating: %s\n",
                   state.deviceName.c_str(),
                   state.targetTemperature,
-                  state.currentTemperature);
+                  state.currentTemperature,
+                  state.isHeating ? "ON" : "OFF");
 
     return true;
 }

@@ -66,4 +66,32 @@ void ui_animate_confirm();
  */
 void ui_update_arc(float temp);
 
+/**
+ * Set heating state (changes background color)
+ * @param heating True if central heating is active
+ */
+void ui_set_heating(bool heating);
+
+/**
+ * Show status text (small text below current temp)
+ * @param text Status text to display
+ */
+void ui_show_status(const char* text);
+
+/**
+ * Clear status text
+ */
+void ui_clear_status();
+
+/**
+ * Set timer to auto-clear status text
+ * @param delay_ms Delay in milliseconds before clearing
+ */
+void ui_set_status_clear_timer(uint32_t delay_ms);
+
+/**
+ * Update UI (call from main loop to handle timers)
+ */
+void ui_update();
+
 #endif // UI_H

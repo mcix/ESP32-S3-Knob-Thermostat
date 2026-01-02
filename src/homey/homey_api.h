@@ -9,6 +9,7 @@
 struct ThermostatState {
     float targetTemperature;
     float currentTemperature;
+    bool isHeating;          // True when central heating is active
     bool connected;
     String deviceName;
     String lastError;

@@ -13,10 +13,12 @@ HomeyAPI homey;
 ThermostatState thermostatState;
 
 // Temperature control state
-static float pendingTemp = TEMP_DEFAULT;
-static float lastSentTemp = TEMP_DEFAULT;
-static bool tempChanged = false;
-static uint32_t lastChangeTime = 0;
+static float confirmedTemp = TEMP_DEFAULT;   // Last confirmed temp from Homey
+static float pendingTemp = TEMP_DEFAULT;     // Temperature being adjusted
+static uint32_t pendingTempTime = 0;         // When pendingTemp was last changed
+static bool hasPendingTemp = false;          // True when there's an unsent change
+static bool isPushingTemp = false;           // True while pushing to Homey
+static bool waitingForConfirm = false;       // True after successful push, waiting for periodic refresh
 static uint32_t lastRefreshTime = 0;
 
 // Forward declarations
@@ -24,7 +26,7 @@ void onEncoderRotation(int8_t direction);
 void onEncoderButton(bool pressed);
 void connectWiFi();
 void fetchThermostatState();
-void sendTemperatureUpdate();
+void checkAndPushTemperature();
 
 void setup() {
     Serial.begin(115200);
@@ -37,9 +39,12 @@ void setup() {
         while (1) delay(100);
     }
 
+    // Set backlight to 50%
+    display_set_brightness(128);
+
     // Initialize UI
     ui_init();
-    ui_set_state(UI_STATE_CONNECTING);
+    ui_show_status("Connecting...");
 
     // Initialize encoder
     if (!encoder_init()) {
@@ -66,20 +71,32 @@ void setup() {
 
 void loop() {
     static uint32_t lastLvglUpdate = 0;
+    static uint32_t lastDebugPrint = 0;
     uint32_t now = millis();
 
-    // Update LVGL (target ~30ms = ~33fps)
+    // Debug: print millis every second
+    if (now - lastDebugPrint >= 1000) {
+        Serial.printf("millis: %lu\n", now);
+        lastDebugPrint = now;
+    }
+
+    // Update LVGL
     if (now - lastLvglUpdate >= 5) {
         lastLvglUpdate = now;
         display_update();
+        ui_update();
     }
 
     // Process encoder callbacks
     encoder_update();
 
-    // Send temperature update after debounce delay
-    if (tempChanged && (now - lastChangeTime >= DEBOUNCE_DELAY_MS)) {
-        sendTemperatureUpdate();
+    // Check if pending temperature should be pushed (2 second debounce)
+    // Use fresh millis() to avoid underflow issues with pendingTempTime set in encoder callback
+    if (hasPendingTemp && !isPushingTemp) {
+        uint32_t currentTime = millis();
+        if (currentTime >= pendingTempTime && (currentTime - pendingTempTime >= DEBOUNCE_DELAY_MS)) {
+            checkAndPushTemperature();
+        }
     }
 
     // Periodic refresh of current temperature
@@ -88,7 +105,6 @@ void loop() {
         lastRefreshTime = now;
     }
 
-    // Small delay to prevent watchdog issues
     delay(1);
 }
 
@@ -106,8 +122,7 @@ void connectWiFi() {
 
         if (millis() - startTime > WIFI_TIMEOUT_MS) {
             Serial.println("\nWiFi connection timeout!");
-            ui_set_state(UI_STATE_ERROR);
-            ui_show_error("WiFi failed");
+            ui_show_status("WiFi failed");
             return;
         }
     }
@@ -115,60 +130,70 @@ void connectWiFi() {
     Serial.println("\nWiFi connected!");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    ui_clear_status();
 }
 
 void fetchThermostatState() {
     Serial.println("Fetching thermostat state...");
 
     if (homey.getState(thermostatState)) {
-        pendingTemp = thermostatState.targetTemperature;
-        lastSentTemp = thermostatState.targetTemperature;
+        confirmedTemp = thermostatState.targetTemperature;
 
-        ui_set_target_temp(thermostatState.targetTemperature);
+        // Only update pending temp if user isn't currently adjusting
+        if (!hasPendingTemp) {
+            pendingTemp = thermostatState.targetTemperature;
+            ui_set_target_temp(thermostatState.targetTemperature);
+        }
+
         ui_set_current_temp(thermostatState.currentTemperature);
-        ui_set_state(UI_STATE_NORMAL);
+        ui_set_heating(thermostatState.isHeating);
 
-        Serial.printf("Target: %.1f°C, Current: %.1f°C\n",
+        // Clear status if we were waiting for confirmation
+        if (waitingForConfirm) {
+            waitingForConfirm = false;
+            ui_clear_status();
+            Serial.println("Temperature confirmed by Homey");
+        }
+
+        Serial.printf("Target: %.1f°C, Current: %.1f°C, Heating: %s\n",
                       thermostatState.targetTemperature,
-                      thermostatState.currentTemperature);
+                      thermostatState.currentTemperature,
+                      thermostatState.isHeating ? "ON" : "OFF");
     } else {
         Serial.println("Failed to fetch thermostat state");
         Serial.println(homey.getLastError());
-        ui_set_state(UI_STATE_ERROR);
-        ui_show_error("Connection failed");
+        ui_show_status("Connection failed");
     }
 }
 
-void sendTemperatureUpdate() {
-    if (!tempChanged || pendingTemp == lastSentTemp) {
-        tempChanged = false;
+void checkAndPushTemperature() {
+    // Don't push if temp hasn't actually changed
+    if (pendingTemp == confirmedTemp) {
+        hasPendingTemp = false;
+        ui_clear_status();
         return;
     }
 
-    Serial.printf("Sending temperature: %.1f°C\n", pendingTemp);
-    ui_set_state(UI_STATE_SENDING);
-    display_update();
+    Serial.printf("Pushing temperature: %.1f°C\n", pendingTemp);
+    ui_show_status("Pushing temp");
+    isPushingTemp = true;
 
     if (homey.setTargetTemperature(pendingTemp)) {
-        lastSentTemp = pendingTemp;
-        ui_animate_confirm();
-
-        // Reset to normal after animation
-        delay(500);
-        display_update();
-        ui_set_state(UI_STATE_NORMAL);
+        confirmedTemp = pendingTemp;
+        hasPendingTemp = false;
+        waitingForConfirm = true;
+        ui_show_status("Temp set");
+        Serial.println("Temperature pushed successfully");
     } else {
-        Serial.println("Failed to set temperature");
+        Serial.println("Failed to push temperature");
         Serial.println(homey.getLastError());
-        ui_set_state(UI_STATE_ERROR);
-        ui_show_error("Send failed");
+        ui_show_status("Push failed");
 
-        // Revert to last known good temperature
-        pendingTemp = lastSentTemp;
-        ui_set_target_temp(pendingTemp);
+        // Keep hasPendingTemp true so we retry on next debounce cycle
+        pendingTempTime = millis();  // Reset debounce timer for retry
     }
 
-    tempChanged = false;
+    isPushingTemp = false;
 }
 
 void onEncoderRotation(int8_t direction) {
@@ -181,20 +206,20 @@ void onEncoderRotation(int8_t direction) {
 
     // Update UI immediately
     ui_set_target_temp(pendingTemp);
-    ui_set_state(UI_STATE_ADJUSTING);
 
-    // Mark as changed and record time for debounce
-    tempChanged = true;
-    lastChangeTime = millis();
+    // Mark as pending and record time for debounce
+    hasPendingTemp = true;
+    pendingTempTime = millis();
+    ui_show_status("Setting temp");
 
     Serial.printf("Encoder: %s, Pending temp: %.1f°C\n",
                   direction > 0 ? "CW" : "CCW", pendingTemp);
 }
 
 void onEncoderButton(bool pressed) {
-    if (pressed && tempChanged) {
-        // Immediate send on button press
-        Serial.println("Button pressed - sending immediately");
-        lastChangeTime = 0;  // Trigger immediate send
+    if (pressed && hasPendingTemp && !isPushingTemp) {
+        // Immediate push on button press
+        Serial.println("Button pressed - pushing immediately");
+        pendingTempTime = 0;  // Trigger immediate push
     }
 }

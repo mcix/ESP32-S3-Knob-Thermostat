@@ -8,7 +8,7 @@
 // ============================================
 // Thermostat Settings
 // ============================================
-#define TEMP_MIN           15.0f    // Minimum temperature (Celsius)
+#define TEMP_MIN           0.0f     // Minimum temperature (Celsius)
 #define TEMP_MAX           30.0f    // Maximum temperature (Celsius)
 #define TEMP_STEP          0.5f     // Temperature adjustment step
 #define TEMP_DEFAULT       20.0f    // Default temperature on startup
