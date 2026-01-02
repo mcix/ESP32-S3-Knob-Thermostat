@@ -6,6 +6,7 @@
 
 // UI Elements
 static lv_obj_t* screen = nullptr;
+static lv_obj_t* thermostat_container = nullptr;  // Container for all thermostat elements
 static lv_obj_t* bg_circle = nullptr;
 static lv_obj_t* label_target = nullptr;
 static lv_obj_t* label_current = nullptr;
@@ -106,7 +107,7 @@ static void create_tick_marks() {
         tick_points_long[i][1].x = x2;
         tick_points_long[i][1].y = y2;
 
-        ticks[i] = lv_line_create(screen);
+        ticks[i] = lv_line_create(thermostat_container);
         lv_line_set_points(ticks[i], tick_points[i], 2);
         lv_obj_set_style_line_color(ticks[i], COLOR_TICK_ACTIVE, 0);
         lv_obj_set_style_line_width(ticks[i], 2, 0);
@@ -121,8 +122,16 @@ void ui_init() {
     lv_obj_set_style_bg_color(screen, COLOR_IDLE, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
 
+    // Create thermostat container
+    thermostat_container = lv_obj_create(screen);
+    lv_obj_remove_style_all(thermostat_container);
+    lv_obj_set_size(thermostat_container, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    lv_obj_set_pos(thermostat_container, 0, 0);
+    lv_obj_set_style_bg_opa(thermostat_container, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(thermostat_container, LV_OBJ_FLAG_SCROLLABLE);
+
     // Background circle
-    bg_circle = lv_obj_create(screen);
+    bg_circle = lv_obj_create(thermostat_container);
     lv_obj_remove_style_all(bg_circle);
     lv_obj_set_size(bg_circle, 350, 350);
     lv_obj_center(bg_circle);
@@ -135,21 +144,21 @@ void ui_init() {
     create_tick_marks();
 
     // Target temperature (large, center)
-    label_target = lv_label_create(screen);
+    label_target = lv_label_create(thermostat_container);
     lv_obj_set_style_text_font(label_target, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(label_target, COLOR_TEXT, 0);
     lv_label_set_text(label_target, "--.-°");
     lv_obj_align(label_target, LV_ALIGN_CENTER, 0, -20);
 
     // Current temperature (below target)
-    label_current = lv_label_create(screen);
+    label_current = lv_label_create(thermostat_container);
     lv_obj_set_style_text_font(label_current, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(label_current, COLOR_TEXT, 0);
     lv_label_set_text(label_current, "--.-°");
     lv_obj_align(label_current, LV_ALIGN_CENTER, 0, 35);
 
     // Small status text (12px, below current temp)
-    label_status = lv_label_create(screen);
+    label_status = lv_label_create(thermostat_container);
     lv_obj_set_style_text_font(label_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(label_status, COLOR_TEXT, 0);
     lv_obj_set_style_text_opa(label_status, LV_OPA_70, 0);
@@ -238,4 +247,23 @@ void ui_update() {
         ui_clear_status();
         status_clear_time = 0;
     }
+}
+
+void ui_set_visible(bool visible) {
+    if (thermostat_container == nullptr) return;
+
+    if (visible) {
+        lv_obj_clear_flag(thermostat_container, LV_OBJ_FLAG_HIDDEN);
+        // Update background color based on heating state
+        lv_color_t bg_color = current_heating ? COLOR_HEATING : COLOR_IDLE;
+        lv_obj_set_style_bg_color(screen, bg_color, LV_PART_MAIN);
+    } else {
+        lv_obj_add_flag(thermostat_container, LV_OBJ_FLAG_HIDDEN);
+        // Reset background to black when not showing thermostat
+        lv_obj_set_style_bg_color(screen, COLOR_IDLE, LV_PART_MAIN);
+    }
+}
+
+lv_obj_t* ui_get_container() {
+    return thermostat_container;
 }

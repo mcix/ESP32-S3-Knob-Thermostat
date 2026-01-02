@@ -94,4 +94,16 @@ void ui_set_status_clear_timer(uint32_t delay_ms);
  */
 void ui_update();
 
+/**
+ * Set visibility of thermostat UI elements
+ * @param visible True to show, false to hide
+ */
+void ui_set_visible(bool visible);
+
+/**
+ * Get the thermostat UI container
+ * @return pointer to container object
+ */
+lv_obj_t* ui_get_container();
+
 #endif // UI_H

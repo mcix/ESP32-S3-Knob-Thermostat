@@ -1,12 +1,15 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <lvgl.h>
+#include <time.h>
 
 #include "config.h"
 #include "hardware/display.h"
 #include "hardware/encoder.h"
+#include "hardware/touch.h"
 #include "homey/homey_api.h"
 #include "ui/ui.h"
+#include "ui/views.h"
 
 // Global instances
 HomeyAPI homey;
@@ -54,11 +57,36 @@ void setup() {
     encoder_set_button_callback(onEncoderButton);
     encoder_register_lvgl();
 
+    // Initialize touch
+    if (!touch_init()) {
+        Serial.println("Touch initialization failed!");
+    }
+
+    // Initialize views (creates clock view)
+    views_init();
+
     // Update display
     display_update();
 
     // Connect to WiFi
     connectWiFi();
+
+    // Configure time for Amsterdam (CET/CEST with automatic DST)
+    // POSIX timezone: CET-1CEST,M3.5.0/2,M10.5.0/3
+    // - CET = standard time name, -1 = UTC+1
+    // - CEST = daylight saving time name
+    // - M3.5.0/2 = DST starts last Sunday of March at 02:00
+    // - M10.5.0/3 = DST ends last Sunday of October at 03:00
+    configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
+    Serial.println("Waiting for NTP time sync (Amsterdam timezone)...");
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 5000)) {
+        Serial.printf("Time: %02d:%02d:%02d (DST: %s)\n",
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+                      timeinfo.tm_isdst ? "yes" : "no");
+    } else {
+        Serial.println("Failed to get time");
+    }
 
     // Initialize Homey API
     homey.begin(HOMEY_IP, HOMEY_API_KEY, THERMOSTAT_DEVICE_ID);
@@ -71,24 +99,26 @@ void setup() {
 
 void loop() {
     static uint32_t lastLvglUpdate = 0;
-    static uint32_t lastDebugPrint = 0;
     uint32_t now = millis();
-
-    // Debug: print millis every second
-    if (now - lastDebugPrint >= 1000) {
-        Serial.printf("millis: %lu\n", now);
-        lastDebugPrint = now;
-    }
 
     // Update LVGL
     if (now - lastLvglUpdate >= 5) {
         lastLvglUpdate = now;
         display_update();
         ui_update();
+        views_update();
     }
 
-    // Process encoder callbacks
-    encoder_update();
+    // Check for touch to toggle views
+    if (touch_tapped()) {
+        Serial.println("Touch detected - switching view");
+        views_next();
+    }
+
+    // Process encoder callbacks (only affects thermostat view)
+    if (views_current() == VIEW_THERMOSTAT) {
+        encoder_update();
+    }
 
     // Check if pending temperature should be pushed (2 second debounce)
     // Use fresh millis() to avoid underflow issues with pendingTempTime set in encoder callback

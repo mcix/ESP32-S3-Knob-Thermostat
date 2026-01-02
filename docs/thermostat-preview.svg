@@ -1,0 +1,47 @@
+<svg width="360" height="360" viewBox="0 0 360 360" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background (orange = heating active) -->
+  <circle cx="180" cy="180" r="180" fill="#E46A2C"/>
+
+  <!-- Tick marks (270 degrees arc, starting at 135 degrees) -->
+  <g stroke="#FFFFFF" stroke-linecap="round" opacity="0.7">
+    <!-- Generate tick marks around the arc -->
+    <!-- Simplified: showing key ticks -->
+    <line x1="52" y1="232" x2="67" y2="222" stroke-width="2"/>
+    <line x1="38" y1="200" x2="55" y2="195" stroke-width="2"/>
+    <line x1="32" y1="165" x2="50" y2="167" stroke-width="2"/>
+    <line x1="35" y1="130" x2="52" y2="137" stroke-width="2"/>
+    <line x1="47" y1="98" x2="62" y2="110" stroke-width="2"/>
+    <line x1="67" y1="70" x2="80" y2="85" stroke-width="2"/>
+    <line x1="95" y1="47" x2="105" y2="65" stroke-width="2"/>
+    <line x1="127" y1="32" x2="133" y2="50" stroke-width="2"/>
+    <line x1="162" y1="25" x2="164" y2="43" stroke-width="2"/>
+  </g>
+
+  <!-- Active ticks (between current and target) - full opacity -->
+  <g stroke="#FFFFFF" stroke-linecap="round">
+    <line x1="198" y1="25" x2="196" y2="43" stroke-width="2"/>
+    <line x1="233" y1="32" x2="227" y2="50" stroke-width="2"/>
+    <line x1="265" y1="47" x2="255" y2="65" stroke-width="2"/>
+    <line x1="293" y1="70" x2="280" y2="85" stroke-width="2"/>
+  </g>
+
+  <!-- Target tick (bold and longer) -->
+  <line x1="313" y1="98" x2="288" y2="115" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- More ticks after target -->
+  <g stroke="#FFFFFF" stroke-linecap="round" opacity="0.7">
+    <line x1="325" y1="130" x2="308" y2="137" stroke-width="2"/>
+    <line x1="328" y1="165" x2="310" y2="167" stroke-width="2"/>
+    <line x1="322" y1="200" x2="305" y2="195" stroke-width="2"/>
+    <line x1="308" y1="232" x2="293" y2="222" stroke-width="2"/>
+  </g>
+
+  <!-- Target temperature (large, center) -->
+  <text x="180" y="175" text-anchor="middle" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="48" font-weight="bold">21.5°</text>
+
+  <!-- Current temperature (smaller, below) -->
+  <text x="180" y="220" text-anchor="middle" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="32">20.5°</text>
+
+  <!-- Status text -->
+  <text x="180" y="260" text-anchor="middle" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="12" opacity="0.7">Temp set</text>
+</svg>
