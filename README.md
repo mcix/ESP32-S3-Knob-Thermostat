@@ -17,6 +17,13 @@ A smart thermostat controller built for the [Waveshare ESP32-S3-Knob-Touch-LCD-1
   <img src="docs/thermostat-preview.svg" alt="Thermostat View" width="300"/>
 </p>
 
+## Photos
+
+<p align="center">
+  <img src="docs/clock-photo.png" alt="Clock View Photo" width="300"/>
+  <img src="docs/thermostat-photo.png" alt="Thermostat View Photo" width="300"/>
+</p>
+
 ## Hardware
 
 <p align="center">
