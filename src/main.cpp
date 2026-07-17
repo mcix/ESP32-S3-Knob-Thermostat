@@ -24,12 +24,26 @@ static bool isPushingTemp = false;           // True while pushing to Homey
 static bool waitingForConfirm = false;       // True after successful push, waiting for periodic refresh
 static uint32_t lastRefreshTime = 0;
 
+// Async HTTP worker (core 0, loop runs on core 1) so blocking requests
+// never freeze the display. The loop owns activeJob and only hands it to
+// the worker via a task notification; the worker signals back with jobDone.
+enum HttpJob : uint8_t { JOB_NONE, JOB_FETCH, JOB_PUSH };
+static TaskHandle_t httpTaskHandle = nullptr;
+static volatile HttpJob activeJob = JOB_NONE;
+static volatile bool jobDone = false;
+static volatile bool jobSuccess = false;
+static float jobPushTemp = 0;                // Input for JOB_PUSH
+static ThermostatState jobState;             // Output of JOB_FETCH
+
 // Forward declarations
 void onEncoderRotation(int8_t direction);
 void onEncoderButton(bool pressed);
 void connectWiFi();
-void fetchThermostatState();
+void checkWiFiConnection();
+bool requestStateFetch();
+void processHttpResult();
 void checkAndPushTemperature();
+void httpTask(void* param);
 
 void setup() {
     Serial.begin(115200);
@@ -91,8 +105,11 @@ void setup() {
     // Initialize Homey API
     homey.begin(HOMEY_IP, HOMEY_API_KEY, THERMOSTAT_DEVICE_ID);
 
+    // Start the HTTP worker; after this only the worker touches `homey`
+    xTaskCreatePinnedToCore(httpTask, "http_worker", 8192, nullptr, 1, &httpTaskHandle, 0);
+
     // Fetch initial thermostat state
-    fetchThermostatState();
+    requestStateFetch();
 
     Serial.println("Initialization complete!");
 }
@@ -115,24 +132,38 @@ void loop() {
         views_next();
     }
 
-    // Process encoder callbacks (only affects thermostat view)
+    // Process encoder callbacks (only affects thermostat view).
+    // From other views, turning the knob wakes the thermostat view;
+    // the waking click itself doesn't change the temperature.
     if (views_current() == VIEW_THERMOSTAT) {
         encoder_update();
+    } else if (encoder_flush()) {
+        Serial.println("Knob turned - switching to thermostat view");
+        views_switch(VIEW_THERMOSTAT);
     }
+
+    // Monitor WiFi link and reconnect if it drops
+    checkWiFiConnection();
+
+    // Handle results from completed HTTP requests
+    processHttpResult();
 
     // Check if pending temperature should be pushed (2 second debounce)
     // Use fresh millis() to avoid underflow issues with pendingTempTime set in encoder callback
-    if (hasPendingTemp && !isPushingTemp) {
+    // Skip while WiFi is down; the push fires as soon as the link is back
+    if (hasPendingTemp && !isPushingTemp && WiFi.status() == WL_CONNECTED) {
         uint32_t currentTime = millis();
         if (currentTime >= pendingTempTime && (currentTime - pendingTempTime >= DEBOUNCE_DELAY_MS)) {
             checkAndPushTemperature();
         }
     }
 
-    // Periodic refresh of current temperature (skip if user is adjusting)
-    if (!hasPendingTemp && (now - lastRefreshTime >= REFRESH_INTERVAL_MS)) {
-        fetchThermostatState();
-        lastRefreshTime = now;
+    // Periodic refresh of current temperature (skip if user is adjusting or WiFi is down)
+    if (!hasPendingTemp && !isPushingTemp && WiFi.status() == WL_CONNECTED &&
+        (now - lastRefreshTime >= REFRESH_INTERVAL_MS)) {
+        if (requestStateFetch()) {
+            lastRefreshTime = now;
+        }
     }
 
     delay(1);
@@ -143,6 +174,9 @@ void connectWiFi() {
     Serial.println(WIFI_SSID);
 
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);       // Don't wear out NVS flash with credentials on every begin()
+    WiFi.setAutoReconnect(true);  // Let the WiFi driver retry on disconnect events
+    WiFi.setSleep(false);         // Modem sleep causes silent drops and latency spikes
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     uint32_t startTime = millis();
@@ -163,37 +197,64 @@ void connectWiFi() {
     ui_clear_status();
 }
 
-void fetchThermostatState() {
-    Serial.println("Fetching thermostat state...");
+void checkWiFiConnection() {
+    static uint32_t lastCheck = 0;
+    static uint32_t disconnectedSince = 0;
+    static uint32_t lastReconnectAttempt = 0;
+    static bool wasConnected = true;
 
-    if (homey.getState(thermostatState)) {
-        confirmedTemp = thermostatState.targetTemperature;
-
-        // Only update pending temp if user isn't currently adjusting
-        if (!hasPendingTemp) {
-            pendingTemp = thermostatState.targetTemperature;
-            ui_set_target_temp(thermostatState.targetTemperature);
-        }
-
-        ui_set_current_temp(thermostatState.currentTemperature);
-        ui_set_heating(thermostatState.isHeating);
-
-        // Clear status if we were waiting for confirmation
-        if (waitingForConfirm) {
-            waitingForConfirm = false;
-            ui_clear_status();
-            Serial.println("Temperature confirmed by Homey");
-        }
-
-        Serial.printf("Target: %.1f°C, Current: %.1f°C, Heating: %s\n",
-                      thermostatState.targetTemperature,
-                      thermostatState.currentTemperature,
-                      thermostatState.isHeating ? "ON" : "OFF");
-    } else {
-        Serial.println("Failed to fetch thermostat state");
-        Serial.println(homey.getLastError());
-        ui_show_status("Connection failed");
+    uint32_t now = millis();
+    if (now - lastCheck < WIFI_CHECK_INTERVAL_MS) {
+        return;
     }
+    lastCheck = now;
+
+    if (WiFi.status() == WL_CONNECTED) {
+        if (!wasConnected) {
+            Serial.print("WiFi reconnected! IP address: ");
+            Serial.println(WiFi.localIP());
+            ui_clear_status();
+            lastRefreshTime = 0;  // Trigger immediate state refresh
+            wasConnected = true;
+        }
+        return;
+    }
+
+    if (wasConnected) {
+        wasConnected = false;
+        disconnectedSince = now;
+        lastReconnectAttempt = now;  // Give auto-reconnect a chance first
+        Serial.println("WiFi connection lost!");
+        ui_show_status("WiFi lost");
+        return;
+    }
+
+    // Last resort: the WiFi stack can wedge in a state it never recovers from
+    if (now - disconnectedSince >= WIFI_REBOOT_AFTER_MS) {
+        Serial.println("WiFi down too long - rebooting");
+        delay(100);  // Let serial output flush
+        ESP.restart();
+    }
+
+    if (now - lastReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS) {
+        lastReconnectAttempt = now;
+        Serial.println("Attempting WiFi reconnect...");
+        ui_show_status("WiFi reconnecting");
+        WiFi.disconnect();
+        WiFi.reconnect();
+    }
+}
+
+bool requestStateFetch() {
+    if (activeJob != JOB_NONE) {
+        return false;  // Worker busy; caller retries later
+    }
+
+    Serial.println("Fetching thermostat state...");
+    jobDone = false;
+    activeJob = JOB_FETCH;
+    xTaskNotifyGive(httpTaskHandle);
+    return true;
 }
 
 void checkAndPushTemperature() {
@@ -204,27 +265,93 @@ void checkAndPushTemperature() {
         return;
     }
 
+    if (activeJob != JOB_NONE) {
+        return;  // Worker busy; retried on next loop pass
+    }
+
     Serial.printf("Pushing temperature: %.1f°C\n", pendingTemp);
     ui_show_status("Pushing temp");
     isPushingTemp = true;
+    jobPushTemp = pendingTemp;
+    jobDone = false;
+    activeJob = JOB_PUSH;
+    xTaskNotifyGive(httpTaskHandle);
+}
 
-    if (homey.setTargetTemperature(pendingTemp)) {
-        confirmedTemp = pendingTemp;
-        hasPendingTemp = false;
-        waitingForConfirm = true;
-        lastRefreshTime = millis();  // Reset refresh timer after push
-        ui_show_status("Temp set");
-        Serial.println("Temperature pushed successfully");
-    } else {
-        Serial.println("Failed to push temperature");
-        Serial.println(homey.getLastError());
-        ui_show_status("Push failed");
-
-        // Keep hasPendingTemp true so we retry on next debounce cycle
-        pendingTempTime = millis();  // Reset debounce timer for retry
+void processHttpResult() {
+    if (!jobDone) {
+        return;
     }
 
-    isPushingTemp = false;
+    HttpJob job = activeJob;
+    bool ok = jobSuccess;
+    jobDone = false;
+    activeJob = JOB_NONE;
+
+    if (job == JOB_FETCH) {
+        if (ok) {
+            thermostatState = jobState;
+            confirmedTemp = thermostatState.targetTemperature;
+
+            // Only update pending temp if user isn't currently adjusting
+            if (!hasPendingTemp) {
+                pendingTemp = thermostatState.targetTemperature;
+                ui_set_target_temp(thermostatState.targetTemperature);
+            }
+
+            ui_set_current_temp(thermostatState.currentTemperature);
+            ui_set_heating(thermostatState.isHeating);
+
+            // Clear status if we were waiting for confirmation
+            if (waitingForConfirm) {
+                waitingForConfirm = false;
+                ui_clear_status();
+                Serial.println("Temperature confirmed by Homey");
+            }
+        } else {
+            Serial.println("Failed to fetch thermostat state");
+            ui_show_status("Connection failed");
+        }
+    } else if (job == JOB_PUSH) {
+        isPushingTemp = false;
+
+        if (ok) {
+            confirmedTemp = jobPushTemp;
+            waitingForConfirm = true;
+            lastRefreshTime = millis();  // Reset refresh timer after push
+            ui_show_status("Temp set");
+            Serial.println("Temperature pushed successfully");
+
+            // The knob may have moved during the push; if so, leave the new
+            // value pending so it gets pushed after its own debounce
+            if (pendingTemp == confirmedTemp) {
+                hasPendingTemp = false;
+            }
+        } else {
+            Serial.println("Failed to push temperature");
+            ui_show_status("Push failed");
+
+            // Keep hasPendingTemp true so we retry on next debounce cycle
+            pendingTempTime = millis();  // Reset debounce timer for retry
+        }
+    }
+}
+
+void httpTask(void* param) {
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        if (activeJob == JOB_FETCH) {
+            jobSuccess = homey.getState(jobState);
+        } else if (activeJob == JOB_PUSH) {
+            jobSuccess = homey.setTargetTemperature(jobPushTemp);
+        }
+
+        if (!jobSuccess) {
+            Serial.println(homey.getLastError());
+        }
+        jobDone = true;
+    }
 }
 
 void onEncoderRotation(int8_t direction) {
@@ -241,13 +368,11 @@ void onEncoderRotation(int8_t direction) {
     // Mark as pending and record time for debounce
     hasPendingTemp = true;
     pendingTempTime = millis();
+    views_reset_activity();
     ui_show_status("Setting temp");
 
     Serial.printf("Encoder: %s, Pending temp: %.1f°C\n",
                   direction > 0 ? "CW" : "CCW", pendingTemp);
-
-    // Print debug info about encoder state transitions
-    encoder_print_debug();
 }
 
 void onEncoderButton(bool pressed) {

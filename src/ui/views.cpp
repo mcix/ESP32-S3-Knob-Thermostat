@@ -12,6 +12,9 @@ static lv_obj_t* view_thermostat = nullptr;
 // Current view
 static ViewType current_view = VIEW_CLOCK;
 
+// Inactivity timeout - auto-switch back to clock
+static uint32_t last_activity_time = 0;
+
 // Clock elements
 static lv_obj_t* clock_face = nullptr;
 static lv_obj_t* hour_hand = nullptr;
@@ -203,6 +206,7 @@ void views_switch(ViewType view) {
         case VIEW_THERMOSTAT:
             // Show thermostat elements
             ui_set_visible(true);
+            last_activity_time = millis();
             Serial.println("Switched to thermostat view");
             break;
 
@@ -220,9 +224,19 @@ ViewType views_current() {
     return current_view;
 }
 
+void views_reset_activity() {
+    last_activity_time = millis();
+}
+
 void views_update() {
     static uint32_t last_clock_update = 0;
     uint32_t now = millis();
+
+    // Auto-switch back to clock after inactivity on thermostat view
+    if (current_view == VIEW_THERMOSTAT && (now - last_activity_time >= THERMOSTAT_TIMEOUT_MS)) {
+        Serial.println("Thermostat inactive - switching to clock");
+        views_switch(VIEW_CLOCK);
+    }
 
     // Update clock every second when visible
     if (current_view == VIEW_CLOCK && (now - last_clock_update >= 1000)) {

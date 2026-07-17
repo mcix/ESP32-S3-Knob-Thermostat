@@ -20,21 +20,34 @@ static lv_group_t* enc_group = nullptr;
 // Debounce settings
 #define BUTTON_DEBOUNCE_MS 50
 
+// Diagnostic logging of decode decisions (printed from main-loop context)
+static const bool ENC_DIAG = false;
+
+// This knob does not emit standard quadrature (verified with the PCNT
+// peripheral: the A and B pulses never overlap, state 00 never occurs).
+// Measured behavior per detent click:
+//  - CW click:  one short low pulse on A, then a burst of 2-4 low pulses
+//               on B belonging to the same click
+//  - CCW click: a single low pulse on B, no A activity
+// So direction is decoded from pulse timing:
+//  - A pulse                          -> CW step
+//  - B pulse shortly after CW activity -> tail of the CW click, ignored
+//  - B pulse otherwise                -> CCW step (with bounce debounce)
+#define CW_TAIL_SUPPRESS_MS 200  // B pulses this soon after CW activity are CW tail
+#define A_BOUNCE_MS         15   // A pulses this close together are bounce
+#define B_BOUNCE_MS         15   // B pulses this close together are bounce
+
+// Pulse event queue (ISR producer, main loop consumer)
+#define EVT_QUEUE_SIZE 32
+static volatile uint32_t evt_time[EVT_QUEUE_SIZE];
+static volatile uint8_t evt_code[EVT_QUEUE_SIZE];  // (from_state << 4) | to_state
+static volatile uint8_t evt_widx = 0;
+
 // Last encoder pin states
 static volatile uint8_t last_state = 0;
 
-// Encoder state tracking for full-step detection
-static volatile int8_t enc_val = 0;
-
-// Debug: store recent state transitions for logging
-#define DEBUG_LOG_SIZE 16
-static volatile uint8_t debug_states[DEBUG_LOG_SIZE];
-static volatile int8_t debug_dirs[DEBUG_LOG_SIZE];
-static volatile uint8_t debug_idx = 0;
-
-// ISR for encoder rotation
-// Only count transitions FROM resting state (11)
-// CW: 11 -> 01, CCW: 11 -> 10
+// ISR for encoder pins: queue every state transition with a timestamp;
+// decoding happens in the main loop where timing logic and logging are safe
 static void IRAM_ATTR encoder_isr() {
     uint8_t a = digitalRead(ENCODER_A);
     uint8_t b = digitalRead(ENCODER_B);
@@ -45,46 +58,11 @@ static void IRAM_ATTR encoder_isr() {
         return;
     }
 
-    int8_t dir = 0;
-
-    // Only count when leaving the 11 resting state
-    if (last_state == 0b11) {
-        if (state == 0b01) {
-            // 11 -> 01: CW
-            encoder_position++;
-            dir = 1;
-            last_direction = 1;
-        } else if (state == 0b10) {
-            // 11 -> 10: CCW
-            encoder_position--;
-            dir = -1;
-            last_direction = -1;
-        }
-    }
-
-    // Log state transition for debugging
-    debug_states[debug_idx] = (last_state << 4) | state;
-    debug_dirs[debug_idx] = dir;
-    debug_idx = (debug_idx + 1) % DEBUG_LOG_SIZE;
+    evt_time[evt_widx] = millis();
+    evt_code[evt_widx] = (last_state << 4) | state;
+    evt_widx = (evt_widx + 1) % EVT_QUEUE_SIZE;
 
     last_state = state;
-}
-
-// Print debug log of recent encoder transitions
-void encoder_print_debug() {
-    Serial.println("Encoder debug log (old_state -> new_state : direction):");
-    for (int i = 0; i < DEBUG_LOG_SIZE; i++) {
-        uint8_t idx = (debug_idx + i) % DEBUG_LOG_SIZE;
-        uint8_t old_s = (debug_states[idx] >> 4) & 0x0F;
-        uint8_t new_s = debug_states[idx] & 0x0F;
-        int8_t dir = debug_dirs[idx];
-        if (old_s != new_s || dir != 0) {
-            Serial.printf("  %d%d -> %d%d : %s\n",
-                          (old_s >> 1) & 1, old_s & 1,
-                          (new_s >> 1) & 1, new_s & 1,
-                          dir > 0 ? "CW" : (dir < 0 ? "CCW" : "-"));
-        }
-    }
 }
 
 // ISR for button press
@@ -98,6 +76,59 @@ static void IRAM_ATTR button_isr() {
     last_button_time = now;
 
     button_state = !digitalRead(ENCODER_BTN);  // Active low
+}
+
+// Decode queued pulse events. Emits rotation callbacks when emit is true;
+// otherwise events are consumed silently but timing state stays coherent.
+// Returns true if any rotation step was decoded.
+static bool process_events(bool emit) {
+    bool rotated = false;
+    static uint8_t ridx = 0;
+    static uint32_t last_cw_ms = 0;   // Last A pulse or suppressed B (CW activity)
+    static uint32_t last_a_ms = 0;
+    static uint32_t last_b_ms = 0;
+
+    while (ridx != evt_widx) {
+        uint32_t t = evt_time[ridx];
+        uint8_t code = evt_code[ridx];
+        ridx = (ridx + 1) % EVT_QUEUE_SIZE;
+
+        if (code == 0x31) {  // 11 -> 01: A fell
+            last_cw_ms = t;
+            if (t - last_a_ms < A_BOUNCE_MS) {
+                if (ENC_DIAG) Serial.printf("[enc] t=%u A pulse (bounce, ignored)\n", (unsigned)t);
+            } else {
+                last_direction = 1;
+                encoder_position++;
+                rotated = true;
+                if (ENC_DIAG) Serial.printf("[enc] t=%u A pulse -> CW\n", (unsigned)t);
+                if (emit && rotation_callback) rotation_callback(1);
+            }
+            last_a_ms = t;
+        } else if (code == 0x32) {  // 11 -> 10: B fell
+            if (t - last_cw_ms < CW_TAIL_SUPPRESS_MS) {
+                // Part of the ongoing CW click; keep the window open so a
+                // long pulse burst stays suppressed as one click
+                last_cw_ms = t;
+                if (ENC_DIAG) Serial.printf("[enc] t=%u B pulse (CW tail, ignored)\n", (unsigned)t);
+            } else if (t - last_b_ms < B_BOUNCE_MS) {
+                if (ENC_DIAG) Serial.printf("[enc] t=%u B pulse (bounce, ignored)\n", (unsigned)t);
+            } else {
+                last_direction = -1;
+                encoder_position--;
+                rotated = true;
+                if (ENC_DIAG) Serial.printf("[enc] t=%u B pulse -> CCW\n", (unsigned)t);
+                if (emit && rotation_callback) rotation_callback(-1);
+            }
+            last_b_ms = t;
+        } else if (ENC_DIAG) {
+            Serial.printf("[enc] t=%u transition %d%d->%d%d\n", (unsigned)t,
+                          (code >> 5) & 1, (code >> 4) & 1,
+                          (code >> 1) & 1, code & 1);
+        }
+    }
+
+    return rotated;
 }
 
 // LVGL encoder read callback
@@ -156,35 +187,9 @@ bool encoder_button_pressed() {
 }
 
 void encoder_update() {
-    static int32_t prev_position = 0;
     static bool prev_button = false;
-    static int8_t prev_dir = 0;
-    static uint32_t last_rotation_time = 0;
 
-    // Check for rotation change
-    int32_t pos = encoder_position;
-    if (pos != prev_position && rotation_callback) {
-        int8_t dir = (pos > prev_position) ? 1 : -1;
-        uint32_t now = millis();
-
-        // Filter rapid direction changes (debounce direction reversals)
-        // If direction reversed within 100ms, likely bounce - ignore
-        if (dir != prev_dir && prev_dir != 0 && (now - last_rotation_time < 100)) {
-            Serial.printf("Encoder: filtered spurious %s (too fast after %s)\n",
-                          dir > 0 ? "CW" : "CCW", prev_dir > 0 ? "CW" : "CCW");
-            // Reset position to ignore this spurious count
-            noInterrupts();
-            encoder_position = prev_position;
-            interrupts();
-            return;
-        }
-
-        // Valid rotation - process it
-        rotation_callback(dir);
-        prev_position = pos;
-        prev_dir = dir;
-        last_rotation_time = now;
-    }
+    process_events(true);
 
     // Check for button change
     bool btn = button_state;
@@ -192,6 +197,10 @@ void encoder_update() {
         button_callback(btn);
         prev_button = btn;
     }
+}
+
+bool encoder_flush() {
+    return process_events(false);
 }
 
 void encoder_register_lvgl() {

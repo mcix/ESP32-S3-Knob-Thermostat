@@ -16,9 +16,13 @@
 // ============================================
 // Timing Configuration
 // ============================================
+#define THERMOSTAT_TIMEOUT_MS  60000   // Auto-switch to clock after inactivity
 #define DEBOUNCE_DELAY_MS      2000    // Delay before sending temp change to Homey
 #define REFRESH_INTERVAL_MS    30000   // Interval to refresh current temperature
 #define WIFI_TIMEOUT_MS        10000   // WiFi connection timeout
+#define WIFI_CHECK_INTERVAL_MS 2000    // How often to check WiFi link status
+#define WIFI_RECONNECT_INTERVAL_MS 10000  // Delay between reconnect attempts
+#define WIFI_REBOOT_AFTER_MS   300000  // Reboot if WiFi stays down this long (last resort)
 #define API_TIMEOUT_MS         5000    // HTTP request timeout
 
 // ============================================

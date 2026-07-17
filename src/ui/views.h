@@ -36,6 +36,12 @@ void views_next();
 ViewType views_current();
 
 /**
+ * Reset the inactivity timer for the thermostat view
+ * Call this when the user interacts with the thermostat (e.g. encoder rotation)
+ */
+void views_reset_activity();
+
+/**
  * Update views (call in main loop)
  * Handles view-specific updates like clock time
  */

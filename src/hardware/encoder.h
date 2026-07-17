@@ -56,14 +56,17 @@ bool encoder_button_pressed();
 void encoder_update();
 
 /**
+ * Discard rotation accumulated since the last update/flush.
+ * Call while the encoder should be inactive (e.g. non-thermostat view)
+ * so stale rotation isn't replayed when it becomes active again.
+ * @return true if any rotation was discarded (knob was turned)
+ */
+bool encoder_flush();
+
+/**
  * Register encoder as LVGL input device
  * Links encoder rotation to LVGL group navigation
  */
 void encoder_register_lvgl();
-
-/**
- * Print debug log of recent encoder state transitions
- */
-void encoder_print_debug();
 
 #endif // ENCODER_H
