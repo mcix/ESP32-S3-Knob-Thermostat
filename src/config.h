@@ -26,6 +26,14 @@
 #define API_TIMEOUT_MS         5000    // HTTP request timeout
 
 // ============================================
+// Outside Weather Configuration
+// Data: KNMI HARMONIE-AROME model via Open-Meteo (no API key required)
+// ============================================
+#define WEATHER_LAT            "52.37"   // Latitude (default: Amsterdam)
+#define WEATHER_LON            "4.89"    // Longitude
+#define WEATHER_REFRESH_INTERVAL_MS 900000  // 15 min; the model updates hourly
+
+// ============================================
 // Display Configuration (ESP32-S3-Knob-Touch-LCD-1.8)
 // Uses ST77916 display with QSPI interface
 // ============================================

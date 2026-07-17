@@ -79,6 +79,13 @@ void ui_set_heating(bool heating);
 void ui_show_status(const char* text);
 
 /**
+ * Show the outside temperature and weather condition icon
+ * @param temp Outside temperature in Celsius
+ * @param wmo_code WMO weather interpretation code (selects the icon)
+ */
+void ui_set_weather(float temp, int wmo_code);
+
+/**
  * Clear status text
  */
 void ui_clear_status();

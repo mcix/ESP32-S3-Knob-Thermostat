@@ -10,6 +10,7 @@
 #include "homey/homey_api.h"
 #include "ui/ui.h"
 #include "ui/views.h"
+#include "weather/weather_api.h"
 
 // Global instances
 HomeyAPI homey;
@@ -27,13 +28,15 @@ static uint32_t lastRefreshTime = 0;
 // Async HTTP worker (core 0, loop runs on core 1) so blocking requests
 // never freeze the display. The loop owns activeJob and only hands it to
 // the worker via a task notification; the worker signals back with jobDone.
-enum HttpJob : uint8_t { JOB_NONE, JOB_FETCH, JOB_PUSH };
+enum HttpJob : uint8_t { JOB_NONE, JOB_FETCH, JOB_PUSH, JOB_WEATHER };
 static TaskHandle_t httpTaskHandle = nullptr;
 static volatile HttpJob activeJob = JOB_NONE;
 static volatile bool jobDone = false;
 static volatile bool jobSuccess = false;
 static float jobPushTemp = 0;                // Input for JOB_PUSH
 static ThermostatState jobState;             // Output of JOB_FETCH
+static WeatherState jobWeather;              // Output of JOB_WEATHER
+static uint32_t lastWeatherTime = 0;         // 0 = fetch as soon as possible
 
 // Forward declarations
 void onEncoderRotation(int8_t direction);
@@ -105,8 +108,9 @@ void setup() {
     // Initialize Homey API
     homey.begin(HOMEY_IP, HOMEY_API_KEY, THERMOSTAT_DEVICE_ID);
 
-    // Start the HTTP worker; after this only the worker touches `homey`
-    xTaskCreatePinnedToCore(httpTask, "http_worker", 8192, nullptr, 1, &httpTaskHandle, 0);
+    // Start the HTTP worker; after this only the worker touches `homey`.
+    // Stack sized for TLS (weather fetch uses HTTPS).
+    xTaskCreatePinnedToCore(httpTask, "http_worker", 12288, nullptr, 1, &httpTaskHandle, 0);
 
     // Fetch initial thermostat state
     requestStateFetch();
@@ -164,6 +168,16 @@ void loop() {
         if (requestStateFetch()) {
             lastRefreshTime = now;
         }
+    }
+
+    // Periodic outside weather refresh (lower priority than thermostat jobs)
+    if (WiFi.status() == WL_CONNECTED && activeJob == JOB_NONE &&
+        (lastWeatherTime == 0 || now - lastWeatherTime >= WEATHER_REFRESH_INTERVAL_MS)) {
+        Serial.println("Fetching outside weather...");
+        jobDone = false;
+        activeJob = JOB_WEATHER;
+        xTaskNotifyGive(httpTaskHandle);
+        lastWeatherTime = now;
     }
 
     delay(1);
@@ -334,6 +348,13 @@ void processHttpResult() {
             // Keep hasPendingTemp true so we retry on next debounce cycle
             pendingTempTime = millis();  // Reset debounce timer for retry
         }
+    } else if (job == JOB_WEATHER) {
+        if (ok) {
+            ui_set_weather(jobWeather.temperature, jobWeather.weatherCode);
+        } else {
+            // Retry in a minute instead of waiting the full refresh interval
+            lastWeatherTime = millis() - (WEATHER_REFRESH_INTERVAL_MS - 60000);
+        }
     }
 }
 
@@ -343,12 +364,12 @@ void httpTask(void* param) {
 
         if (activeJob == JOB_FETCH) {
             jobSuccess = homey.getState(jobState);
+            if (!jobSuccess) Serial.println(homey.getLastError());
         } else if (activeJob == JOB_PUSH) {
             jobSuccess = homey.setTargetTemperature(jobPushTemp);
-        }
-
-        if (!jobSuccess) {
-            Serial.println(homey.getLastError());
+            if (!jobSuccess) Serial.println(homey.getLastError());
+        } else if (activeJob == JOB_WEATHER) {
+            jobSuccess = weather_fetch(jobWeather);
         }
         jobDone = true;
     }

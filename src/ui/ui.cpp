@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "weather_icons.h"
 #include "../config.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -21,6 +22,11 @@ static lv_obj_t* ticks[NUM_TICKS];
 static lv_point_t tick_points[NUM_TICKS][2];
 static lv_point_t tick_points_long[NUM_TICKS][2];
 
+// Outside weather elements (Lucide icon rendered as a tintable LVGL image)
+static lv_obj_t* weather_container = nullptr;
+static lv_obj_t* label_weather = nullptr;
+static lv_obj_t* weather_icon = nullptr;
+
 // Current state
 static float current_target = TEMP_DEFAULT;
 static float current_temp = TEMP_DEFAULT;
@@ -35,6 +41,10 @@ static const lv_color_t COLOR_HEATING = lv_color_hex(0xE46A2C);     // RGB 228, 
 static const lv_color_t COLOR_IDLE = lv_color_hex(0x000000);
 static const lv_color_t COLOR_TEXT = lv_color_hex(0xFFFFFF);
 static const lv_color_t COLOR_TICK_ACTIVE = lv_color_hex(0xFFFFFF);
+static const lv_color_t COLOR_SUN = lv_color_hex(0xFFC83C);
+static const lv_color_t COLOR_CLOUD = lv_color_hex(0xC8C8C8);
+static const lv_color_t COLOR_RAIN = lv_color_hex(0x4FA8FF);
+static const lv_color_t COLOR_SNOW = lv_color_hex(0xFFFFFF);
 
 // Convert temperature to tick index (0-59)
 static int temp_to_tick_index(float temp) {
@@ -116,6 +126,33 @@ static void create_tick_marks() {
     }
 }
 
+// Build the outside-weather readout: a Lucide condition icon (tinted at
+// draw time) plus the outside temperature label, above the target temp
+static void create_weather_elements() {
+    weather_container = lv_obj_create(thermostat_container);
+    lv_obj_remove_style_all(weather_container);
+    lv_obj_set_size(weather_container, 108, 44);
+    lv_obj_align(weather_container, LV_ALIGN_CENTER, 0, -90);
+    lv_obj_clear_flag(weather_container, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Condition icon: an alpha-8bit image recolored per condition
+    weather_icon = lv_img_create(weather_container);
+    lv_img_set_src(weather_icon, &wi_sun);
+    lv_obj_align(weather_icon, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_img_recolor_opa(weather_icon, LV_OPA_COVER, 0);
+    lv_obj_set_style_img_recolor(weather_icon, COLOR_SUN, 0);
+
+    // Outside temperature label next to the icon
+    label_weather = lv_label_create(weather_container);
+    lv_obj_set_style_text_font(label_weather, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(label_weather, COLOR_TEXT, 0);
+    lv_label_set_text(label_weather, "--.-°");
+    lv_obj_align(label_weather, LV_ALIGN_LEFT_MID, 52, 0);
+
+    // Hidden until the first weather fetch succeeds
+    lv_obj_add_flag(weather_container, LV_OBJ_FLAG_HIDDEN);
+}
+
 void ui_init() {
     screen = lv_scr_act();
     lv_obj_remove_style_all(screen);
@@ -165,7 +202,49 @@ void ui_init() {
     lv_label_set_text(label_status, "");
     lv_obj_align(label_status, LV_ALIGN_CENTER, 0, 75);
 
+    // Outside weather readout (above the target temperature)
+    create_weather_elements();
+
     Serial.println("UI initialized");
+}
+
+void ui_set_weather(float temp, int wmo_code) {
+    if (weather_container == nullptr) return;
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.1f°", temp);
+    lv_label_set_text(label_weather, buf);
+
+    // Map the WMO weather interpretation code to a Lucide icon and tint.
+    // Codes: 0-1 clear, 2 partly cloudy, 3 overcast, 45/48 fog,
+    // 51-57 drizzle, 61-67 rain, 71-77 snow, 80-82 rain showers,
+    // 85/86 snow showers, 95-99 thunderstorm.
+    const lv_img_dsc_t* src;
+    lv_color_t tint;
+
+    if (wmo_code <= 1) {
+        src = &wi_sun;             tint = COLOR_SUN;    // Clear / mainly clear
+    } else if (wmo_code == 2) {
+        src = &wi_cloud_sun;       tint = COLOR_SUN;    // Partly cloudy
+    } else if (wmo_code == 45 || wmo_code == 48) {
+        src = &wi_cloud_fog;       tint = COLOR_CLOUD;  // Fog
+    } else if ((wmo_code >= 71 && wmo_code <= 77) || wmo_code == 85 || wmo_code == 86) {
+        src = &wi_cloud_snow;      tint = COLOR_SNOW;   // Snow
+    } else if (wmo_code >= 95) {
+        src = &wi_cloud_lightning; tint = COLOR_SUN;    // Thunderstorm
+    } else if (wmo_code >= 80) {
+        src = &wi_cloud_rain;      tint = COLOR_RAIN;   // Rain showers
+    } else if (wmo_code >= 51) {
+        src = &wi_cloud_drizzle;   tint = COLOR_RAIN;   // Drizzle / rain
+    } else {
+        src = &wi_cloudy;          tint = COLOR_CLOUD;  // Overcast and anything else
+    }
+
+    lv_img_set_src(weather_icon, src);
+    lv_obj_set_style_img_recolor(weather_icon, tint, 0);
+    lv_obj_align(weather_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_clear_flag(weather_container, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_set_target_temp(float temp) {
