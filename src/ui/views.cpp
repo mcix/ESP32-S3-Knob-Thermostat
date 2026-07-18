@@ -37,11 +37,13 @@ static const lv_color_t COLOR_MINUTE = lv_color_hex(0xFFFFFF);
 static const lv_color_t COLOR_SECOND = lv_color_hex(0xE46A2C);  // Orange accent
 static const lv_color_t COLOR_CENTER = lv_color_hex(0xFFFFFF);
 
-// Clock dimensions
-#define CLOCK_RADIUS 160
-#define HOUR_HAND_LEN 80
-#define MINUTE_HAND_LEN 120
-#define SECOND_HAND_LEN 130
+// Clock dimensions — scaled to fill the 360x360 screen (outer tick at
+// r=176, 4px from the edge). Hand lengths and tick offsets keep the same
+// proportions to CLOCK_RADIUS as the original 160px design.
+#define CLOCK_RADIUS 188
+#define HOUR_HAND_LEN (CLOCK_RADIUS / 2)        // 94  (was 80 @ R=160)
+#define MINUTE_HAND_LEN (CLOCK_RADIUS * 3 / 4)  // 141 (was 120)
+#define SECOND_HAND_LEN (CLOCK_RADIUS * 13 / 16) // 152 (was 130)
 #define CENTER_X (DISPLAY_WIDTH / 2)
 #define CENTER_Y (DISPLAY_HEIGHT / 2)
 
@@ -73,7 +75,10 @@ static void create_clock_view() {
     // Create clock face background circle
     clock_face = lv_obj_create(view_clock);
     lv_obj_remove_style_all(clock_face);
-    lv_obj_set_size(clock_face, CLOCK_RADIUS * 2, CLOCK_RADIUS * 2);
+    // Background circle: full-screen (invisible, black on black). Capped at
+    // the display size so it never exceeds the screen as CLOCK_RADIUS grows.
+    lv_obj_set_size(clock_face, min(CLOCK_RADIUS * 2, DISPLAY_WIDTH),
+                    min(CLOCK_RADIUS * 2, DISPLAY_HEIGHT));
     lv_obj_center(clock_face);
     lv_obj_set_style_radius(clock_face, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(clock_face, COLOR_CLOCK_FACE, 0);
@@ -83,8 +88,8 @@ static void create_clock_view() {
     // Create hour tick marks
     for (int i = 0; i < 12; i++) {
         float angle = (i * 30 - 90) * M_PI / 180.0f;  // -90 to start at 12 o'clock
-        int outer_r = CLOCK_RADIUS - 10;
-        int inner_r = (i % 3 == 0) ? CLOCK_RADIUS - 30 : CLOCK_RADIUS - 20;  // Longer at 12, 3, 6, 9
+        int outer_r = CLOCK_RADIUS - 12;
+        int inner_r = (i % 3 == 0) ? CLOCK_RADIUS - 35 : CLOCK_RADIUS - 24;  // Longer at 12, 3, 6, 9
 
         static lv_point_t tick_points[12][2];
         tick_points[i][0].x = CENTER_X + (int)(inner_r * cosf(angle));
@@ -120,7 +125,7 @@ static void create_clock_view() {
     // Create center dot
     center_dot = lv_obj_create(view_clock);
     lv_obj_remove_style_all(center_dot);
-    lv_obj_set_size(center_dot, 12, 12);
+    lv_obj_set_size(center_dot, 14, 14);
     lv_obj_set_style_radius(center_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(center_dot, COLOR_CENTER, 0);
     lv_obj_set_style_bg_opa(center_dot, LV_OPA_COVER, 0);
@@ -131,7 +136,7 @@ static void create_clock_view() {
     lv_obj_set_style_text_font(time_label, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(time_label, COLOR_TICK, 0);
     lv_label_set_text(time_label, "00:00");
-    lv_obj_align(time_label, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_align(time_label, LV_ALIGN_CENTER, 0, 94);
 
     // Initial hand positions
     update_clock_hands();
