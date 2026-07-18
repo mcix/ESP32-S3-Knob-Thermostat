@@ -330,6 +330,7 @@ void processHttpResult() {
 
             ui_set_current_temp(thermostatState.currentTemperature);
             ui_set_heating(thermostatState.isHeating);
+            views_set_indoor_temp(thermostatState.currentTemperature);
 
             // Clear status if we were waiting for confirmation
             if (waitingForConfirm) {
@@ -366,6 +367,7 @@ void processHttpResult() {
     } else if (job == JOB_WEATHER) {
         if (ok) {
             ui_set_weather(jobWeather.temperature, jobWeather.weatherCode);
+            views_set_outdoor(jobWeather.temperature, jobWeather.weatherCode);
         } else {
             // Retry in a minute instead of waiting the full refresh interval
             lastWeatherTime = millis() - (WEATHER_REFRESH_INTERVAL_MS - 60000);

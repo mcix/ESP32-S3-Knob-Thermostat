@@ -1,5 +1,6 @@
 #include "views.h"
 #include "ui.h"
+#include "weather_icon_map.h"
 #include "../config.h"
 #include <Arduino.h>
 #include <math.h>
@@ -22,6 +23,11 @@ static lv_obj_t* minute_hand = nullptr;
 static lv_obj_t* second_hand = nullptr;
 static lv_obj_t* center_dot = nullptr;
 static lv_obj_t* time_label = nullptr;
+
+// Indoor/outdoor temperature readout above the clock center
+static lv_obj_t* clock_indoor_label = nullptr;
+static lv_obj_t* clock_outdoor_icon = nullptr;
+static lv_obj_t* clock_outdoor_label = nullptr;
 
 // Clock hand line points
 static lv_point_t hour_points[2];
@@ -131,12 +137,48 @@ static void create_clock_view() {
     lv_obj_set_style_bg_opa(center_dot, LV_OPA_COVER, 0);
     lv_obj_align(center_dot, LV_ALIGN_CENTER, 0, 0);
 
-    // Create digital time label below clock
+    // Digital time, in the lower half between the center and the bottom tick
     time_label = lv_label_create(view_clock);
     lv_obj_set_style_text_font(time_label, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(time_label, COLOR_TICK, 0);
     lv_label_set_text(time_label, "00:00");
-    lv_obj_align(time_label, LV_ALIGN_CENTER, 0, 94);
+    lv_obj_align(time_label, LV_ALIGN_CENTER, 0, 64);
+
+    // Outdoor temperature (weather icon + value) on top, above the center
+    lv_obj_t* out_row = lv_obj_create(view_clock);
+    lv_obj_remove_style_all(out_row);
+    lv_obj_set_size(out_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(out_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(out_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(out_row, 5, 0);
+    lv_obj_clear_flag(out_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(out_row, LV_ALIGN_CENTER, 0, -80);
+
+    // 24px condition icon (native size, ~matches the temp text height)
+    clock_outdoor_icon = lv_img_create(out_row);
+    lv_img_set_src(clock_outdoor_icon, &wi_sun_s);
+    lv_obj_set_style_img_recolor_opa(clock_outdoor_icon, LV_OPA_COVER, 0);
+    lv_obj_set_style_img_recolor(clock_outdoor_icon, lv_color_hex(0xFFC83C), 0);
+
+    clock_outdoor_label = lv_label_create(out_row);
+    lv_obj_set_style_text_font(clock_outdoor_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(clock_outdoor_label, COLOR_TICK, 0);
+    lv_label_set_text(clock_outdoor_label, "--.-°");
+
+    // Indoor temperature (home glyph + value) just below the outdoor row
+    clock_indoor_label = lv_label_create(view_clock);
+    lv_obj_set_style_text_font(clock_indoor_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(clock_indoor_label, COLOR_TICK, 0);
+    lv_label_set_text(clock_indoor_label, LV_SYMBOL_HOME "  --.-°");
+    lv_obj_align(clock_indoor_label, LV_ALIGN_CENTER, 0, -48);
+
+    // Keep the clock hands and center dot on top of the temperature/time
+    // labels (z-order follows creation order, so raise them last)
+    lv_obj_move_foreground(hour_hand);
+    lv_obj_move_foreground(minute_hand);
+    lv_obj_move_foreground(second_hand);
+    lv_obj_move_foreground(center_dot);
 
     // Initial hand positions
     update_clock_hands();
@@ -231,6 +273,27 @@ ViewType views_current() {
 
 void views_reset_activity() {
     last_activity_time = millis();
+}
+
+void views_set_indoor_temp(float temp) {
+    if (clock_indoor_label == nullptr) return;
+    char buf[24];
+    snprintf(buf, sizeof(buf), LV_SYMBOL_HOME "  %.1f°", temp);
+    lv_label_set_text(clock_indoor_label, buf);
+    lv_obj_align(clock_indoor_label, LV_ALIGN_CENTER, 0, -48);
+}
+
+void views_set_outdoor(float temp, int wmo_code) {
+    if (clock_outdoor_label == nullptr) return;
+
+    lv_color_t tint;
+    const lv_img_dsc_t* src = weather_icon_small_for_code(wmo_code, &tint);
+    lv_img_set_src(clock_outdoor_icon, src);
+    lv_obj_set_style_img_recolor(clock_outdoor_icon, tint, 0);
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.1f°", temp);
+    lv_label_set_text(clock_outdoor_label, buf);
 }
 
 void views_update() {

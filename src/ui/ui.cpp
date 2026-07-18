@@ -1,5 +1,5 @@
 #include "ui.h"
-#include "weather_icons.h"
+#include "weather_icon_map.h"
 #include "../config.h"
 #include <Arduino.h>
 #include <stdio.h>
@@ -41,10 +41,7 @@ static const lv_color_t COLOR_HEATING = lv_color_hex(0xE46A2C);     // RGB 228, 
 static const lv_color_t COLOR_IDLE = lv_color_hex(0x000000);
 static const lv_color_t COLOR_TEXT = lv_color_hex(0xFFFFFF);
 static const lv_color_t COLOR_TICK_ACTIVE = lv_color_hex(0xFFFFFF);
-static const lv_color_t COLOR_SUN = lv_color_hex(0xFFC83C);
-static const lv_color_t COLOR_CLOUD = lv_color_hex(0xC8C8C8);
-static const lv_color_t COLOR_RAIN = lv_color_hex(0x4FA8FF);
-static const lv_color_t COLOR_SNOW = lv_color_hex(0xFFFFFF);
+static const lv_color_t COLOR_SUN = lv_color_hex(0xFFC83C);  // Initial icon tint
 
 // Convert temperature to tick index (0-59)
 static int temp_to_tick_index(float temp) {
@@ -215,30 +212,9 @@ void ui_set_weather(float temp, int wmo_code) {
     snprintf(buf, sizeof(buf), "%.1f°", temp);
     lv_label_set_text(label_weather, buf);
 
-    // Map the WMO weather interpretation code to a Lucide icon and tint.
-    // Codes: 0-1 clear, 2 partly cloudy, 3 overcast, 45/48 fog,
-    // 51-57 drizzle, 61-67 rain, 71-77 snow, 80-82 rain showers,
-    // 85/86 snow showers, 95-99 thunderstorm.
-    const lv_img_dsc_t* src;
+    // Map the WMO weather interpretation code to a Lucide icon and tint
     lv_color_t tint;
-
-    if (wmo_code <= 1) {
-        src = &wi_sun;             tint = COLOR_SUN;    // Clear / mainly clear
-    } else if (wmo_code == 2) {
-        src = &wi_cloud_sun;       tint = COLOR_SUN;    // Partly cloudy
-    } else if (wmo_code == 45 || wmo_code == 48) {
-        src = &wi_cloud_fog;       tint = COLOR_CLOUD;  // Fog
-    } else if ((wmo_code >= 71 && wmo_code <= 77) || wmo_code == 85 || wmo_code == 86) {
-        src = &wi_cloud_snow;      tint = COLOR_SNOW;   // Snow
-    } else if (wmo_code >= 95) {
-        src = &wi_cloud_lightning; tint = COLOR_SUN;    // Thunderstorm
-    } else if (wmo_code >= 80) {
-        src = &wi_cloud_rain;      tint = COLOR_RAIN;   // Rain showers
-    } else if (wmo_code >= 51) {
-        src = &wi_cloud_drizzle;   tint = COLOR_RAIN;   // Drizzle / rain
-    } else {
-        src = &wi_cloudy;          tint = COLOR_CLOUD;  // Overcast and anything else
-    }
+    const lv_img_dsc_t* src = weather_icon_for_code(wmo_code, &tint);
 
     lv_img_set_src(weather_icon, src);
     lv_obj_set_style_img_recolor(weather_icon, tint, 0);

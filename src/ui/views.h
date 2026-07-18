@@ -42,6 +42,19 @@ ViewType views_current();
 void views_reset_activity();
 
 /**
+ * Set the indoor temperature shown on the clock view
+ * @param temp Indoor temperature in Celsius
+ */
+void views_set_indoor_temp(float temp);
+
+/**
+ * Set the outdoor temperature and condition icon shown on the clock view
+ * @param temp Outdoor temperature in Celsius
+ * @param wmo_code WMO weather interpretation code (selects the icon)
+ */
+void views_set_outdoor(float temp, int wmo_code);
+
+/**
  * Update views (call in main loop)
  * Handles view-specific updates like clock time
  */
