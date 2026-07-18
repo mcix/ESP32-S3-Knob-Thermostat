@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include <time.h>
+#include <sys/time.h>
 
 // View containers
 static lv_obj_t* view_clock = nullptr;
@@ -185,19 +186,20 @@ static void create_clock_view() {
 }
 
 static void update_clock_hands() {
-    // Get current time
-    time_t now;
+    // Get current time with sub-second resolution for a smooth second hand
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
     struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
+    localtime_r(&tv.tv_sec, &timeinfo);
 
     int hours = timeinfo.tm_hour % 12;
     int minutes = timeinfo.tm_min;
-    int seconds = timeinfo.tm_sec;
+    float seconds = timeinfo.tm_sec + tv.tv_usec / 1000000.0f;  // fractional
 
-    // Calculate angles (0 degrees = 12 o'clock, clockwise)
+    // Calculate angles (0 degrees = 12 o'clock, clockwise). The second and
+    // minute hands include the fraction below them so they sweep smoothly.
     float hour_angle = ((hours * 60 + minutes) / 720.0f) * 360.0f - 90.0f;
-    float minute_angle = (minutes / 60.0f) * 360.0f - 90.0f;
+    float minute_angle = ((minutes + seconds / 60.0f) / 60.0f) * 360.0f - 90.0f;
     float second_angle = (seconds / 60.0f) * 360.0f - 90.0f;
 
     // Convert to radians
@@ -226,10 +228,15 @@ static void update_clock_hands() {
     second_points[1].y = CENTER_Y + (int)(SECOND_HAND_LEN * sinf(second_rad));
     lv_line_set_points(second_hand, second_points, 2);
 
-    // Update digital time
-    char time_str[6];
-    snprintf(time_str, sizeof(time_str), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-    lv_label_set_text(time_label, time_str);
+    // Update digital time only when the HH:MM string changes (this runs
+    // ~20x/sec for the smooth hand, but the label needs redrawing per minute)
+    static int last_shown_min = -1;
+    if (timeinfo.tm_min != last_shown_min) {
+        last_shown_min = timeinfo.tm_min;
+        char time_str[6];
+        snprintf(time_str, sizeof(time_str), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        lv_label_set_text(time_label, time_str);
+    }
 }
 
 void views_switch(ViewType view) {
@@ -306,8 +313,9 @@ void views_update() {
         views_switch(VIEW_CLOCK);
     }
 
-    // Update clock every second when visible
-    if (current_view == VIEW_CLOCK && (now - last_clock_update >= 1000)) {
+    // Update the clock ~20x/sec when visible so the second hand sweeps
+    // smoothly instead of ticking once per second
+    if (current_view == VIEW_CLOCK && (now - last_clock_update >= 50)) {
         last_clock_update = now;
         update_clock_hands();
     }
