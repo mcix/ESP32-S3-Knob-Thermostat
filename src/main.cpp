@@ -137,13 +137,28 @@ void loop() {
     }
 
     // Process encoder callbacks (only affects thermostat view).
-    // From other views, turning the knob wakes the thermostat view;
-    // the waking click itself doesn't change the temperature.
+    // From other views, a deliberate turn wakes the thermostat view: it
+    // takes ENCODER_WAKE_STEPS within a short window, so a single phantom
+    // pulse can't bounce the view over. The waking steps are discarded,
+    // so they don't change the temperature.
     if (views_current() == VIEW_THERMOSTAT) {
         encoder_update();
-    } else if (encoder_flush()) {
-        Serial.println("Knob turned - switching to thermostat view");
-        views_switch(VIEW_THERMOSTAT);
+    } else {
+        static uint8_t wakeSteps = 0;
+        static uint32_t lastWakeStep = 0;
+        int steps = encoder_flush();
+        if (steps > 0) {
+            if (now - lastWakeStep > ENCODER_WAKE_WINDOW_MS) {
+                wakeSteps = 0;  // Previous activity was too long ago; restart
+            }
+            wakeSteps += steps;
+            lastWakeStep = now;
+            if (wakeSteps >= ENCODER_WAKE_STEPS) {
+                wakeSteps = 0;
+                Serial.println("Knob turned - switching to thermostat view");
+                views_switch(VIEW_THERMOSTAT);
+            }
+        }
     }
 
     // Monitor WiFi link and reconnect if it drops

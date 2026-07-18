@@ -80,9 +80,9 @@ static void IRAM_ATTR button_isr() {
 
 // Decode queued pulse events. Emits rotation callbacks when emit is true;
 // otherwise events are consumed silently but timing state stays coherent.
-// Returns true if any rotation step was decoded.
-static bool process_events(bool emit) {
-    bool rotated = false;
+// Returns the number of rotation steps decoded this call.
+static int process_events(bool emit) {
+    int steps = 0;
     static uint8_t ridx = 0;
     static uint32_t last_cw_ms = 0;   // Last A pulse or suppressed B (CW activity)
     static uint32_t last_a_ms = 0;
@@ -100,7 +100,7 @@ static bool process_events(bool emit) {
             } else {
                 last_direction = 1;
                 encoder_position++;
-                rotated = true;
+                steps++;
                 if (ENC_DIAG) Serial.printf("[enc] t=%u A pulse -> CW\n", (unsigned)t);
                 if (emit && rotation_callback) rotation_callback(1);
             }
@@ -116,7 +116,7 @@ static bool process_events(bool emit) {
             } else {
                 last_direction = -1;
                 encoder_position--;
-                rotated = true;
+                steps++;
                 if (ENC_DIAG) Serial.printf("[enc] t=%u B pulse -> CCW\n", (unsigned)t);
                 if (emit && rotation_callback) rotation_callback(-1);
             }
@@ -128,7 +128,7 @@ static bool process_events(bool emit) {
         }
     }
 
-    return rotated;
+    return steps;
 }
 
 // LVGL encoder read callback
@@ -199,7 +199,7 @@ void encoder_update() {
     }
 }
 
-bool encoder_flush() {
+int encoder_flush() {
     return process_events(false);
 }
 

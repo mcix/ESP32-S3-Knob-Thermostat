@@ -59,9 +59,9 @@ void encoder_update();
  * Discard rotation accumulated since the last update/flush.
  * Call while the encoder should be inactive (e.g. non-thermostat view)
  * so stale rotation isn't replayed when it becomes active again.
- * @return true if any rotation was discarded (knob was turned)
+ * @return number of rotation steps discarded (0 if the knob was still)
  */
-bool encoder_flush();
+int encoder_flush();
 
 /**
  * Register encoder as LVGL input device

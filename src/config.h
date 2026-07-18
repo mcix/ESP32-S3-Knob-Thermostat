@@ -66,6 +66,11 @@
 #define ENCODER_B          7    // Rotary encoder pin B
 #define ENCODER_BTN        0    // Encoder button pin (active low) - may be touch-based
 
+// Steps required (within the window) to wake the thermostat view from
+// another view. >1 so a single phantom pulse can't bounce the view over.
+#define ENCODER_WAKE_STEPS     2
+#define ENCODER_WAKE_WINDOW_MS 500  // Steps must arrive within this window
+
 // ============================================
 // Haptic Feedback (DRV2605)
 // ============================================
